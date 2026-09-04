@@ -108,6 +108,7 @@ class Product(BaseModel):
     bundle_suggestions: List[dict] = Field(default_factory=list)
     regions: List[dict] = Field(default_factory=list)
     niches: List[dict] = Field(default_factory=list)
+    viral_videos: List[dict] = Field(default_factory=list)
     market_brief: Optional[MarketBrief] = None
 
 
@@ -634,6 +635,193 @@ async def generate_niches(product_id: str, force: bool = Query(False)):
 
     await db.products.update_one({"id": product_id}, {"$set": {"niches": niches, "niches_source": source}})
     return {"niches": niches, "source": source}
+
+
+class StoreSpyRequest(BaseModel):
+    url: str
+
+
+class RFQRequest(BaseModel):
+    product_id: str
+    ship_to_country: str = "US"
+    moq: int = 500
+    target_unit_price_usd: float = 4.0
+    target_delivery_days: int = 30
+    company_name: Optional[str] = None
+    contact_name: Optional[str] = None
+
+
+@api_router.post("/store-spy")
+async def store_spy(payload: StoreSpyRequest):
+    """AI-powered store analysis given any Shopify/TikTok Shop URL. Falls back to seeded template."""
+    url = (payload.url or "").strip()
+    if not url or not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Provide a full URL starting with http(s)://")
+
+    llm_key = os.environ.get("EMERGENT_LLM_KEY")
+    source = "template"
+    result: dict = {}
+
+    if llm_key:
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage
+            chat = LlmChat(
+                api_key=llm_key,
+                session_id=f"trendsell-storespy-{uuid.uuid4()}",
+                system_message=(
+                    "You are TrendSell's competitor storefront analyst. Given a Shopify/TikTok Shop/DTC store URL, "
+                    "produce a plausible intelligence brief. Output STRICT JSON only."
+                ),
+            ).with_model("gemini", "gemini-3-flash-preview")
+            prompt = (
+                f"Analyze the storefront at {url}. Return ONLY a JSON object with keys: "
+                "domain, brand_name, category, monthly_traffic_estimate (string like '~180K visits'), "
+                "estimated_monthly_revenue (string), top_products (list of 5 objects with 'name' + 'estimated_share_pct'), "
+                "installed_apps (list of 6 shopify apps or tools), ad_signals (list of 4 short observations "
+                "like 'Meta Advantage+ Shopping running for 42 days'), "
+                "traffic_sources (list of 5 objects with 'source' and 'share_pct'), "
+                "trust_signals (list of 4 short observations), key_takeaway (1 sentence)."
+            )
+            resp = await chat.send_message(UserMessage(text=prompt))
+            text = resp if isinstance(resp, str) else str(resp)
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1:
+                result = json.loads(text[start:end + 1])
+                source = "gemini-3-flash-preview"
+        except Exception as e:
+            logger.warning(f"store-spy LLM failed: {e}")
+
+    if not result:
+        # Deterministic fallback
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc or url
+        brand = domain.replace("www.", "").split(".")[0].title() or "Storefront"
+        result = {
+            "domain": domain,
+            "brand_name": brand,
+            "category": "Multi-category DTC",
+            "monthly_traffic_estimate": "~85K visits",
+            "estimated_monthly_revenue": "~$420K",
+            "top_products": [
+                {"name": "Hero SKU", "estimated_share_pct": 34},
+                {"name": "Bundle Kit", "estimated_share_pct": 22},
+                {"name": "Accessory Add-on", "estimated_share_pct": 14},
+                {"name": "Refill / Consumable", "estimated_share_pct": 12},
+                {"name": "Seasonal Drop", "estimated_share_pct": 8},
+            ],
+            "installed_apps": ["Klaviyo", "Yotpo Reviews", "Recharge Subscriptions", "Loox", "Gorgias", "PostPilot"],
+            "ad_signals": [
+                "Meta Advantage+ Shopping running for 42 days",
+                "TikTok Spark Ads with 3 hero creatives",
+                "Google Shopping active on core keywords",
+                "Retargeting via Klaviyo email + SMS",
+            ],
+            "traffic_sources": [
+                {"source": "Direct", "share_pct": 34},
+                {"source": "Meta / Instagram Ads", "share_pct": 28},
+                {"source": "Google (Organic + Paid)", "share_pct": 18},
+                {"source": "TikTok Referrals", "share_pct": 12},
+                {"source": "Email / SMS", "share_pct": 8},
+            ],
+            "trust_signals": [
+                "4.7★ average from 2,100+ verified reviews",
+                "Free-shipping threshold at $50",
+                "30-day money-back guarantee",
+                "Subscribe-and-save 15% offer visible on PDP",
+            ],
+            "key_takeaway": "Solid DTC playbook — leaning heavily on paid social with strong retention infra.",
+        }
+
+    return {
+        "input_url": url,
+        "data": result,
+        "source": source,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@api_router.post("/products/{product_id}/rfq")
+async def generate_rfq(product_id: str, payload: RFQRequest):
+    """Generate a supplier RFQ email for a product. LLM-drafted with template fallback."""
+    doc = await db.products.find_one({"id": product_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Product not found")
+    enriched = _enrich(_strip_mongo(dict(doc)))
+    suppliers = enriched.get("suppliers", [])[:3]
+
+    llm_key = os.environ.get("EMERGENT_LLM_KEY")
+    subject = ""
+    body = ""
+    source = "template"
+
+    if llm_key:
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage
+            chat = LlmChat(
+                api_key=llm_key,
+                session_id=f"trendsell-rfq-{uuid.uuid4()}",
+                system_message=(
+                    "You are a professional e-commerce sourcing manager. Draft concise, courteous RFQ emails "
+                    "that suppliers can quote against quickly. Output STRICT JSON only with keys 'subject' and 'body'."
+                ),
+            ).with_model("gemini", "gemini-3-flash-preview")
+            prompt = (
+                "Draft an RFQ email as JSON {subject, body}.\n"
+                f"Product: {enriched['name']} ({enriched['category']})\n"
+                f"Buyer ship-to: {payload.ship_to_country}\n"
+                f"Target MOQ: {payload.moq} units\n"
+                f"Target unit price: ~${payload.target_unit_price_usd:.2f} USD FOB\n"
+                f"Target delivery: within {payload.target_delivery_days} days\n"
+                f"Company: {payload.company_name or 'our team'}\n"
+                f"Signed by: {payload.contact_name or 'Sourcing Manager'}\n"
+                "Body should be 150-220 words: intro, bullet spec requirements, ask for unit price @ MOQ, "
+                "sample availability, lead time, payment terms, certifications (mention 2 relevant ones for the category). "
+                "Professional but warm tone."
+            )
+            resp = await chat.send_message(UserMessage(text=prompt))
+            text = resp if isinstance(resp, str) else str(resp)
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1:
+                parsed = json.loads(text[start:end + 1])
+                subject = str(parsed.get("subject", ""))[:200]
+                body = str(parsed.get("body", ""))[:3000]
+                if subject and body:
+                    source = "gemini-3-flash-preview"
+        except Exception as e:
+            logger.warning(f"RFQ LLM failed: {e}")
+
+    if not subject or not body:
+        subject = f"RFQ — {enriched['name']} · MOQ {payload.moq} · Ship to {payload.ship_to_country}"
+        body = (
+            f"Hello,\n\n"
+            f"We are {payload.company_name or 'a growing e-commerce brand'} sourcing {enriched['name']} "
+            f"for the {payload.ship_to_country} market. We are evaluating suppliers and would appreciate a quote.\n\n"
+            f"Requirements:\n"
+            f"• Product: {enriched['name']} ({enriched['category']})\n"
+            f"• MOQ: {payload.moq} units\n"
+            f"• Target unit price: ~${payload.target_unit_price_usd:.2f} USD FOB\n"
+            f"• Ship-to country: {payload.ship_to_country}\n"
+            f"• Delivery: within {payload.target_delivery_days} days of PO\n\n"
+            f"Please share:\n"
+            f"1. Unit price at MOQ and price breaks for 2×, 5×, 10× MOQ\n"
+            f"2. Sample availability and cost\n"
+            f"3. Lead time, packaging options, and payment terms\n"
+            f"4. Relevant certifications (e.g. CE, FCC, RoHS, BIS as applicable)\n\n"
+            f"Looking forward to your response.\n\n"
+            f"Best regards,\n"
+            f"{payload.contact_name or 'Sourcing Manager'}\n"
+            f"{payload.company_name or ''}"
+        )
+
+    return {
+        "subject": subject,
+        "body": body,
+        "source": source,
+        "suggested_suppliers": suppliers,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 app.include_router(api_router)

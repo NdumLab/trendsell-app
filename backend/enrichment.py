@@ -2,6 +2,50 @@
 from typing import List, Dict, Any
 
 
+_CATEGORY_VIRAL_VIDEOS: Dict[str, List[Dict[str, Any]]] = {
+    "Home": [
+        {"creator": "@stanleyverse", "platform": "TikTok", "title": "POV: your emotional support water bottle finally arrived", "views": "4.2M", "engagement_pct": 12.4, "posted_days_ago": 6, "thumbnail_hue": 42},
+        {"creator": "@hydration.era", "platform": "TikTok", "title": "restocking my Stanley wall — every color 🌈", "views": "2.8M", "engagement_pct": 9.6, "posted_days_ago": 12, "thumbnail_hue": 12},
+        {"creator": "@sarahmomlife", "platform": "Reels", "title": "Why every mom needs a Quencher — 30 day update", "views": "980K", "engagement_pct": 7.2, "posted_days_ago": 18, "thumbnail_hue": 200},
+    ],
+    "Beauty": [
+        {"creator": "@skincarebyhyram", "platform": "TikTok", "title": "the ONLY snail mucin routine you need in 2026", "views": "8.6M", "engagement_pct": 14.8, "posted_days_ago": 4, "thumbnail_hue": 320},
+        {"creator": "@glossysister", "platform": "TikTok", "title": "60 days of snail mucin — before/after 😳", "views": "5.1M", "engagement_pct": 16.2, "posted_days_ago": 9, "thumbnail_hue": 340},
+        {"creator": "@k.beauty.diaries", "platform": "Reels", "title": "Korean skincare hierarchy explained in 90 seconds", "views": "1.9M", "engagement_pct": 8.4, "posted_days_ago": 14, "thumbnail_hue": 300},
+    ],
+    "Fitness": [
+        {"creator": "@wallpilates.jen", "platform": "TikTok", "title": "10 min wall Pilates that changed my back forever", "views": "6.4M", "engagement_pct": 13.2, "posted_days_ago": 3, "thumbnail_hue": 160},
+        {"creator": "@balaverse", "platform": "TikTok", "title": "hot girl walk essentials 2026", "views": "2.2M", "engagement_pct": 10.4, "posted_days_ago": 10, "thumbnail_hue": 180},
+        {"creator": "@softpilates", "platform": "Reels", "title": "why weighted bangles > dumbbells for beginners", "views": "1.4M", "engagement_pct": 8.6, "posted_days_ago": 16, "thumbnail_hue": 140},
+    ],
+    "Fashion": [
+        {"creator": "@halara.dupes", "platform": "TikTok", "title": "5 activewear dresses ranked by BBL effect", "views": "9.2M", "engagement_pct": 18.4, "posted_days_ago": 5, "thumbnail_hue": 280},
+        {"creator": "@tenniscoreedit", "platform": "TikTok", "title": "tenniscore uniform of the summer", "views": "3.4M", "engagement_pct": 11.2, "posted_days_ago": 11, "thumbnail_hue": 60},
+        {"creator": "@ridgewallet", "platform": "YouTube Shorts", "title": "why I still use my Ridge after 4 years", "views": "1.1M", "engagement_pct": 7.8, "posted_days_ago": 20, "thumbnail_hue": 220},
+    ],
+    "Electronics": [
+        {"creator": "@mkbhd.clips", "platform": "YouTube Shorts", "title": "GaN chargers explained in 60s", "views": "2.8M", "engagement_pct": 9.4, "posted_days_ago": 8, "thumbnail_hue": 220},
+        {"creator": "@travelhacks.jules", "platform": "TikTok", "title": "AirTag tricks every solo traveler needs", "views": "5.6M", "engagement_pct": 13.6, "posted_days_ago": 6, "thumbnail_hue": 240},
+    ],
+    "Kitchen": [
+        {"creator": "@creami.recipes", "platform": "TikTok", "title": "cottage cheese ice cream — 32g protein 🍦", "views": "12.4M", "engagement_pct": 19.2, "posted_days_ago": 2, "thumbnail_hue": 50},
+        {"creator": "@proteinaddict", "platform": "Reels", "title": "Ninja CREAMi review — worth it or not?", "views": "3.8M", "engagement_pct": 12.4, "posted_days_ago": 7, "thumbnail_hue": 30},
+        {"creator": "@ketogeneration", "platform": "TikTok", "title": "keto ice cream in 90 seconds — no sugar", "views": "1.6M", "engagement_pct": 9.8, "posted_days_ago": 15, "thumbnail_hue": 90},
+    ],
+    "Pet": [
+        {"creator": "@catsofthetok", "platform": "TikTok", "title": "smart feeder unboxing — my cat's reaction 🐱", "views": "3.2M", "engagement_pct": 15.8, "posted_days_ago": 5, "thumbnail_hue": 20},
+        {"creator": "@petparentlife", "platform": "Reels", "title": "3 reasons every cat parent needs a PetLibro", "views": "820K", "engagement_pct": 8.2, "posted_days_ago": 13, "thumbnail_hue": 40},
+    ],
+    "Gadgets": [
+        {"creator": "@techtok.daily", "platform": "TikTok", "title": "5 desk gadgets under $30 that changed my WFH", "views": "4.8M", "engagement_pct": 13.4, "posted_days_ago": 6, "thumbnail_hue": 260},
+    ],
+}
+
+
+"""Enrichment templates + logic for TrendSell — deterministic, category-driven."""
+from typing import List, Dict, Any
+
+
 # ---------- Category-driven templates ----------
 
 PLATFORM_FEES = [
@@ -435,6 +479,7 @@ def enrich(doc: Dict[str, Any]) -> Dict[str, Any]:
     doc["ad_spend_estimates"] = _CATEGORY_ADSPEND.get(cat, [])
     doc["bundle_suggestions"] = _CATEGORY_BUNDLES.get(cat, [])
     doc["regions"] = _CATEGORY_REGIONS.get(cat, [])
+    doc["viral_videos"] = _CATEGORY_VIRAL_VIDEOS.get(cat, [])
     # Niches: use stored (LLM-generated) if present, else fallback template
     if not doc.get("niches"):
         doc["niches"] = _CATEGORY_NICHES.get(cat, [])
