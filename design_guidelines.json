@@ -1,0 +1,183 @@
+{
+  "app_identity": {
+    "name": "TrendSell — Product & Sales Intelligence Dashboard",
+    "theme_strategy": "Dark mode default (#0B0F17 base) with seamless light mode toggle option (#F8FAFC base). Monochromatic surface elevation with vibrant signal accents (Emerald #10B981 for demand, Indigo #6366F1 for tech, Violet #8B5CF6 for TikTok trends, Amber #F59E0B for warnings).",
+    "archetype": "HIGH-DENSITY DATA INTELLIGENCE & PERFORMANCE PRO",
+    "mood": "Precision command center, tactile analytics, high-speed data flow, clear opportunity scoring"
+  },
+  "typography": {
+    "font_family_heading": "Plus Jakarta Sans, sans-serif",
+    "font_family_body": "Inter, sans-serif",
+    "font_family_mono": "JetBrains Mono, monospace",
+    "hierarchy": {
+      "h1": "text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight",
+      "h3": "text-lg sm:text-xl font-semibold tracking-normal",
+      "card_title": "text-base sm:text-lg font-bold tracking-normal",
+      "body": "text-sm sm:text-base font-normal leading-relaxed",
+      "small_label": "text-xs font-semibold tracking-wider uppercase"
+    }
+  },
+  "colors": {
+    "dark_mode": {
+      "bg_primary": "#0B0F17",
+      "bg_secondary": "#111827",
+      "bg_card": "#1E293B",
+      "bg_card_hover": "#334155",
+      "border": "#1E293B",
+      "border_active": "#475569",
+      "text_primary": "#F8FAFC",
+      "text_secondary": "#94A3B8",
+      "text_muted": "#64748B",
+      "accent_emerald": "#10B981",
+      "accent_indigo": "#6366F1",
+      "accent_violet": "#8B5CF6",
+      "accent_amber": "#F59E0B",
+      "accent_rose": "#F43F5E"
+    },
+    "light_mode": {
+      "bg_primary": "#F8FAFC",
+      "bg_secondary": "#F1F5F9",
+      "bg_card": "#FFFFFF",
+      "bg_card_hover": "#F8FAFC",
+      "border": "#E2E8F0",
+      "border_active": "#CBD5E1",
+      "text_primary": "#0F172A",
+      "text_secondary": "#475569",
+      "text_muted": "#94A3B8",
+      "accent_emerald": "#059669",
+      "accent_indigo": "#4F46E5",
+      "accent_violet": "#7C3AED",
+      "accent_amber": "#D97706",
+      "accent_rose": "#E11D48"
+    },
+    "badges": {
+      "tiktok_shop": "bg-pink-500/10 text-pink-500 border-pink-500/20",
+      "amazon_ppc": "bg-amber-500/10 text-amber-500 border-amber-500/20",
+      "meta_ads": "bg-blue-500/10 text-blue-500 border-blue-500/20",
+      "shopify_app": "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
+      "influencer": "bg-purple-500/10 text-purple-500 border-purple-500/20"
+    }
+  },
+  "layout_and_structure": {
+    "sidebar": {
+      "type": "Fixed collapsible desktop sidebar, slide-over mobile menu",
+      "width": "w-64",
+      "collapsed_width": "w-20",
+      "items": [
+        {"name": "Dashboard", "icon": "LayoutDashboard", "path": "/"},
+        {"name": "Trending Products", "icon": "TrendingUp", "path": "/products"},
+        {"name": "Sales Drivers", "icon": "Zap", "path": "/drivers"},
+        {"name": "Platform Analytics", "icon": "BarChart3", "path": "/analytics"},
+        {"name": "AI Research Lab", "icon": "Sparkles", "path": "/research"}
+      ]
+    },
+    "header": {
+      "height": "h-16",
+      "elements": [
+        "Brand logo 'TrendSell' with live pulse status indicator",
+        "Global Search Input with shortcut hint (Ctrl+K / Cmd+K)",
+        "Category Quick Filter dropdown/pills",
+        "Refresh Data trigger button with AI spin loader animation",
+        "Dark / Light theme switch toggle button",
+        "Notification bell with recent opportunity alerts count badge"
+      ]
+    },
+    "grid_modes": {
+      "kpi_bar": "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6",
+      "product_cards": "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6",
+      "deep_dive_detail": "grid grid-cols-1 lg:grid-cols-12 gap-8"
+    }
+  },
+  "key_features_and_components": {
+    "home_dashboard": {
+      "kpi_cards": [
+        "Total Trending Products Tracked (e.g., 1,482)",
+        "Avg Opportunity Gauge Score (e.g., 88.4 / 100)",
+        "Top Velocity Channel (e.g., TikTok Shop +142%)",
+        "Active Driver Apps & Tools (e.g., 64 connected)"
+      ],
+      "search_and_filter": "Category pills (All, Electronics, Beauty, Home & Living, Fitness, Fashion, Gadgets) + live keyword search + demand filter slider",
+      "product_card": {
+        "features": [
+          "High quality product image from curated Unsplash library",
+          "Demand trend score ring or horizontal bar gauge",
+          "Category tag with custom badge styling",
+          "Key driver platform badges (TikTok, Meta, Amazon, Shopify)",
+          "Est. monthly revenue & growth rate (+X%)",
+          "Quick Deep Dive button (triggers detail modal or page)"
+        ]
+      }
+    },
+    "product_deep_dive": {
+      "overview": "Product banner, detailed overview, current monthly sales estimation, why it is trending breakdown",
+      "market_opportunity_gauge": "Visual semi-circle radial gauge or progress bar with score (0-100), risk index, and growth potential label",
+      "sales_drivers": "Structured list of ecosystem apps/tools driving sales (e.g. Kalodata, Motion Ads, Loox Reviews, Triple Whale, Helium10) with contribution breakdown % and strategy explanation",
+      "recharts_analytics": "Area / Line chart showing 6-month demand trajectory vs search volume index across platforms"
+    },
+    "research_engine": {
+      "refresh_button": "Triggers backend AI research request with real-time progress modal/toast step indicators ('Scanning TikTok Shop API...', 'Analyzing Meta Ad Library...', 'Scraping Amazon Best Sellers...')"
+    }
+  },
+  "media_and_assets": {
+    "product_images": [
+      {
+        "category": "Electronics & Gadgets",
+        "title": "Ergonomic Mechanical RGB Keyboard",
+        "url": "https://images.unsplash.com/photo-1626363778444-899127e4c086?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHwxfHx0cmVuZGluZyUyMGUtY29tbWVyY2UlMjBwcm9kdWN0cyUyMHNtYXJ0JTIwZ2FkZ2V0cyUyMGJlYXV0eSUyMG1lY2hhbmljYWwlMjBrZXlib2FyZCUyMHdpcmVsZXNzJTIwZWFyYnVkc3xlbnwwfHx8fDE3ODg0Mjg5OTB8MA&ixlib=rb-4.1.0&q=85"
+      },
+      {
+        "category": "Beauty & Skincare",
+        "title": "Hydrating Serum with Gold Dropper",
+        "url": "https://images.unsplash.com/photo-1576426863848-c21f53c60b19?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHwxfHxza2luY2FyZSUyMGJvdHRsZSUyMHNlcnVtJTIwbHV4dXJ5JTIwY29zbWV0aWMlMjBwYWNrYWdpbmd8ZW58MHx8fHwxNzg4NDI4OTk3fDA&ixlib=rb-4.1.0&q=85"
+      },
+      {
+        "category": "Beauty & Skincare",
+        "title": "Botanical Night Repair Elixir Kit",
+        "url": "https://images.unsplash.com/photo-1633793566063-52465a148cc7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHwzfHxza2luY2FyZSUyMGJvdHRsZSUyMHNlcnVtJTIwbHV4dXJ5JTIwY29zbWV0aWMlMjBwYWNrYWdpbmd8ZW58MHx8fHwxNzg4NDI4OTk3fDA&ixlib=rb-4.1.0&q=85"
+      },
+      {
+        "category": "Fitness & Wearables",
+        "title": "Smart Health & Oxygen Monitor Watch",
+        "url": "https://images.unsplash.com/photo-1617043786394-f977fa12eddf?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwyfHxzbWFydCUyMHdhdGNoJTIwZml0bmVzcyUyMHRyYWNrZXIlMjB3aXJlbGVzcyUyMGVhcmJ1ZHMlMjBwb3J0YWJsZSUyMHNwZWFrZXJ8ZW58MHx8fHwxNzg4NDI4OTk3fDA&ixlib=rb-4.1.0&q=85"
+      },
+      {
+        "category": "Gadgets & Setup",
+        "title": "Wireless Desktop Productivity Station",
+        "url": "https://images.unsplash.com/photo-1688789645479-955d294b419f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHwyfHx0cmVuZGluZyUyMGUtY29tbWVyY2UlMjBwcm9kdWN0cyUyMHNtYXJ0JTIwZ2FkZ2V0cyUyMGJlYXV0eSUyMG1lY2hhbmljYWwlMjBrZXlib2FyZCUyMHdpcmVsZXNzJTIwZWFyYnVkc3xlbnwwfHx8fDE3ODg0Mjg5OTB8MA&ixlib=rb-4.1.0&q=85"
+      }
+    ]
+  },
+  "motion_and_interactions": {
+    "hover_effects": "Slight upward translation (-translate-y-1), border color shift to accent ring, smooth shadow projection",
+    "transitions": "transition-all duration-200 ease-in-out",
+    "framer_motion": "Page container entrance fade-in, staggered list items for product grid, dialog drawer slide-in for product deep dive modal"
+  },
+  "testing_and_accessibility": {
+    "data_testids_required": [
+      "app-header-brand",
+      "global-search-input",
+      "refresh-data-button",
+      "theme-toggle-button",
+      "sidebar-nav-link",
+      "category-filter-chip",
+      "product-card",
+      "product-card-title",
+      "product-card-demand-score",
+      "product-deep-dive-trigger",
+      "product-detail-modal",
+      "market-opportunity-gauge",
+      "sales-driver-item",
+      "trend-recharts-container"
+    ],
+    "contrast_rule": "Ensure minimum 4.5:1 text contrast. Never rely on transparent backgrounds for header or popups."
+  },
+  "instructions_to_main_agent": [
+    "Build the dashboard using React + Tailwind with Lucide React icons and Recharts.",
+    "Ensure dark mode is enabled by default with dark root styling (dark class on html/wrapper), and support toggle to light mode using local state / next-themes pattern.",
+    "Incorporate all testids listed in testing_and_accessibility.",
+    "Populate initial state with rich realistic e-commerce trending product data across multiple categories (Electronics, Beauty, Fitness, Home, Fashion).",
+    "Implement the simulated or FastAPI backend trigger for 'Refresh Data' with simulated AI scan stages and Sonner toast notifications.",
+    "Do NOT use transparent backgrounds for overlays, modals, or dropdown menus."
+  ]
+}
