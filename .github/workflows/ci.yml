@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r backend/requirements.txt
+      - name: Fail fast when required settings are missing
+        working-directory: backend
+        run: |
+          if env -u DATABASE_URL -u CORS_ORIGINS APP_ENV=production python -c "from app.settings import Settings; Settings.from_env()" 2>/dev/null; then
+            echo "Settings.from_env() accepted a production environment with no DATABASE_URL"; exit 1
+          fi
+      - run: python -m pytest tests/redesign
+        working-directory: backend
+
+  frontend:
+    name: Frontend type-check, tests and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  clean-clone:
+    name: Clean clone builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every source file the app imports is tracked
+        run: |
+          set -e
+          for path in frontend/src/lib frontend/src/shared frontend/src/features backend/app contracts; do
+            test -n "$(git ls-files "$path")" || { echo "$path is not tracked — check .gitignore"; exit 1; }
+          done
+          test -z "$(git ls-files '*.env' 'backend/.env' 'frontend/.env')" || { echo "an .env file is tracked"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build from the checkout with no local state
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Import the API from the checkout
+        run: |
+          pip install -r backend/requirements.txt
+          cd backend && APP_ENV=test DATABASE_URL=sqlite:// CORS_ORIGINS=http://localhost:3000 \
+            python -c "from app.main import create_app; from app.settings import Settings; create_app(Settings.from_env()); print('API imports cleanly')"
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reject credential-shaped strings in tracked files
+        run: |
+          set +e
+          PATTERN='(sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[abpr]-[0-9A-Za-z-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)'
+          HITS=$(git ls-files -z | xargs -0 grep -InE "$PATTERN" -- 2>/dev/null | grep -v '^\.github/workflows/ci.yml:')
+          if [ -n "$HITS" ]; then echo "$HITS"; echo "Credential-shaped strings found. Rotate the key and remove it from history."; exit 1; fi
+          echo "No credential-shaped strings in tracked files."
+      - name: The example environment file carries no values
+        run: |
+          if grep -nE '^[A-Z_]+=(sk-|ghp_|AKIA|AIza|xox)' .env.example; then
+            echo ".env.example must document variables, never values"; exit 1
+          fi
+          echo ".env.example is clean."
+
+  dependency-scan:
+    name: Dependency scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pip-audit
+      - run: pip-audit --requirement backend/requirements.txt --strict
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm audit --audit-level=high
+        working-directory: frontend

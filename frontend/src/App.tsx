@@ -1,48 +1,42 @@
-import React, { useState } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import "@/App.css";
-import Layout from "@/components/Layout";
-import Dashboard from "@/pages/Dashboard";
-import ProductDetail from "@/pages/ProductDetail";
-import Analytics from "@/pages/Analytics";
-import Drivers from "@/pages/Drivers";
-import Suppliers from "@/pages/Suppliers";
-import Research from "@/pages/Research";
-import Watchlist from "@/pages/Watchlist";
-import Compare from "@/pages/Compare";
-import Fees from "@/pages/Fees";
-import { ThemeProvider } from "@/context/ThemeContext";
-import { LocationProvider } from "@/context/LocationContext";
-import { WatchlistProvider, CompareProvider } from "@/context/AppState";
+import React, { useEffect, useState } from 'react';
+import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Activity, ArrowDownUp, ArrowRight, ArrowUpRight, Bell, ChevronDown, Compass, Factory, FlaskConical, Home, LogIn, Menu, Moon, PanelLeftClose, ScanLine, Search, Settings as SettingsIcon, ShieldCheck, Sun, TrendingUp, X } from 'lucide-react';
+import { Toaster, toast } from 'sonner';
+import { useQuery } from '@tanstack/react-query';
+import { WorkspaceProvider, useWorkspace } from '@/shared/Workspace';
+import { Modal, Notice } from '@/shared/UI';
+import { api, post } from '@/lib/api';
+import Today from '@/features/Today';
+import Xray from '@/features/Xray';
+import { Discover, ProductView, MarketGaps } from '@/features/Products';
+import DecisionRoom from '@/features/DecisionRoom';
+import { DataHealth, Settings, Suppliers, Watchtower } from '@/features/Operations';
+import type { User } from '@/types';
 
-function App() {
-  const [search, setSearch] = useState("");
-  return (
-    <ThemeProvider>
-      <LocationProvider>
-        <WatchlistProvider>
-          <CompareProvider>
-            <BrowserRouter>
-              <Layout search={search} onSearch={setSearch}>
-                <Routes>
-                  <Route path="/" element={<Dashboard search={search} />} />
-                  <Route path="/products" element={<Dashboard search={search} />} />
-                  <Route path="/products/:id" element={<ProductDetail />} />
-                  <Route path="/watchlist" element={<Watchlist />} />
-                  <Route path="/compare" element={<Compare />} />
-                  <Route path="/drivers" element={<Drivers search={search} />} />
-                  <Route path="/suppliers" element={<Suppliers search={search} />} />
-                  <Route path="/fees" element={<Fees />} />
-                  <Route path="/analytics" element={<Analytics />} />
-                  <Route path="/research" element={<Research />} />
-                </Routes>
-              </Layout>
-            </BrowserRouter>
-          </CompareProvider>
-        </WatchlistProvider>
-      </LocationProvider>
-    </ThemeProvider>
-  );
+const navigation=[{name:'Today',path:'/',icon:Home},{name:'Discover',path:'/discover',icon:Compass},{name:'Product X-Ray',path:'/xray',icon:ScanLine},{name:'Market Gaps',path:'/market-gaps',icon:ArrowDownUp},{name:'Decision Room',path:'/decisions',icon:FlaskConical},{name:'Watchtower',path:'/watchtower',icon:Bell},{name:'Suppliers',path:'/suppliers',icon:Factory}];
+function AuthDialog(){
+ const {authOpen,setAuthOpen,refresh}=useWorkspace();const [register,setRegister]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState('');
+ const {data:config}=useQuery({queryKey:['config'],queryFn:()=>api<{allow_registration:boolean}>('/config'),retry:false,enabled:authOpen});
+ return <Modal open={authOpen} onOpenChange={setAuthOpen} title={register?'Create your workspace':'Welcome to TrendSell'} description="Keep your investigations, decisions, and supplier quotes together."><form className="stack" onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');const data=new FormData(e.currentTarget);try{await post<User>(`/auth/${register?'register':'login'}`,{email:data.get('email'),password:data.get('password'),name:data.get('name')||'My workspace'});await refresh();setAuthOpen(false);toast.success(register?'Workspace created':'Welcome back');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}}>
+ {register&&<label>Workspace name<input name="name" required minLength={1} maxLength={80} autoComplete="organization" placeholder="Your business"/></label>}
+ <label>Email address<input name="email" type="email" required autoComplete="email" placeholder="you@company.com"/></label><label>Password<input name="password" type="password" required minLength={12} maxLength={128} autoComplete={register?'new-password':'current-password'} placeholder="At least 12 characters"/></label>
+ {error&&<div role="alert" className="form-error">{error}</div>}<button className="button primary full" disabled={busy}>{busy?'Please wait…':register?'Create workspace':'Sign in'}<ArrowRight size={16}/></button>
+ {config?.allow_registration&&<button className="text-button centered" type="button" onClick={()=>{setRegister(!register);setError('');}}>{register?'Already have an account? Sign in':'New here? Create a workspace'}</button>}
+ </form></Modal>;
 }
-
-export default App;
+function Shell(){
+ const w=useWorkspace();const location=useLocation();const navigate=useNavigate();const [menu,setMenu]=useState(false);const [search,setSearch]=useState('');
+ const [theme,setTheme]=useState(localStorage.getItem('trendsell-theme-v2')||'dark');
+ useEffect(()=>{document.documentElement.className=theme;localStorage.setItem('trendsell-theme-v2',theme);},[theme]);
+ useEffect(()=>{setMenu(false);window.scrollTo(0,0);},[location.pathname]);
+ useEffect(()=>{const key=(e:KeyboardEvent)=>{if(e.key==='/'&& !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement)){e.preventDefault();document.getElementById('workspace-search')?.focus();}};document.addEventListener('keydown',key);return()=>document.removeEventListener('keydown',key);},[]);
+ const nav=<><div className="nav-label">WORKSPACE</div><nav aria-label="Main navigation">{navigation.map(({name,path,icon:Icon})=><NavLink key={path} to={path} end={path==='/'} className={({isActive})=>`nav-item ${isActive?'active':''}`} onClick={()=>setMenu(false)}><Icon size={18}/><span>{name}</span>{path==='/xray'&&<span className="nav-new">NEW</span>}{path==='/watchtower'&&w.watches.length>0&&<span className="nav-count">{w.watches.length}</span>}</NavLink>)}</nav><div className="nav-bottom"><div className="nav-label">MANAGE</div><NavLink to="/data-health" className={({isActive})=>`nav-item ${isActive?'active':''}`}><Activity size={18}/><span>Data Health</span><span className="health-dot"/></NavLink><NavLink to="/settings" className={({isActive})=>`nav-item ${isActive?'active':''}`}><SettingsIcon size={18}/><span>Settings</span></NavLink></div></>;
+ return <div className="app-shell"><a href="#main-content" className="skip-link">Skip to content</a><aside className="sidebar"><Link to="/" className="brand"><span className="brand-mark"><TrendingUp size={23} strokeWidth={2.6}/></span><span>TrendSell<span className="brand-dot">.</span></span></Link><button className="workspace-switch" onClick={()=>w.user||w.demo?navigate('/settings'):w.setAuthOpen(true)}><span className="workspace-avatar">{w.demo?'D':(w.user?.name||'My')[0].toUpperCase()}</span><span>{w.demo?'Demo workspace':w.user?.name||'My workspace'}<small>{w.demo?'Explore the experience':'China → Nigeria pilot'}</small></span><ChevronDown size={14}/></button>{nav}<div className="sidebar-note"><ShieldCheck size={20}/><h4>Evidence over guesswork.</h4><p>Every good decision starts with knowing what you know.</p><Link to="/data-health">View data coverage<ArrowUpRight size={13}/></Link></div><button className="profile" onClick={()=>w.user||w.demo?navigate('/settings'):w.setAuthOpen(true)}><span className="profile-avatar">{w.demo?'DE':w.user?w.user.name.slice(0,2).toUpperCase():<LogIn size={18}/>}</span><span>{w.demo?'Demo explorer':w.user?.name||'Your next opportunity'}<small>{w.demo?'Sample data only':w.user?'Workspace owner':'Sign in to get started'}</small></span><ChevronDown size={14}/></button></aside>
+ <div className="main-shell"><header className="topbar"><button className="icon-button mobile-menu" onClick={()=>setMenu(true)} aria-label="Open navigation"><Menu size={21}/></button><div className="breadcrumb">Workspace<ChevronRightIcon/><span>{location.pathname.startsWith('/products/')?'Product investigation':navigation.find(n=>n.path===location.pathname)?.name|| (location.pathname==='/data-health'?'Data Health':'Settings')}</span></div><form className="global-search" onSubmit={e=>{e.preventDefault();navigate(`/discover?q=${encodeURIComponent(search)}`);}}><Search size={16}/><input id="workspace-search" aria-label="Search investigations" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search your workspace…"/><kbd>/</kbd></form><div className="topbar-actions"><Link to="/settings" className="market-pill"><span className="nigeria-flag"/>Nigeria<ChevronDown size={13}/></Link><span className="topbar-divider"/><button className="icon-button" aria-label={`Switch to ${theme==='dark'?'light':'dark'} mode`} onClick={()=>setTheme(theme==='dark'?'light':'dark')}>{theme==='dark'?<Sun size={18}/>:<Moon size={18}/>}</button><Link to="/watchtower" className="icon-button" aria-label="Open Watchtower"><Bell size={18}/></Link></div></header>
+ {w.demo?<div className="mode-banner"><FlaskConical size={14}/><strong>DEMO WORKSPACE</strong><span>Synthetic examples. No live market data or real investment recommendations.</span><button onClick={w.exitDemo}>Exit demo<X size={13}/></button></div>:<div className="pilot-banner"><span className="small-dot"/>PILOT WORKSPACE<span className="pilot-banner-detail">A focused corridor. A clearer decision.</span><button onClick={()=>void w.enterDemo()}>Explore demo<ArrowUpRight size={13}/></button></div>}
+ <main id="main-content" tabIndex={-1}>{w.error&&<div className="connection-error"><Notice kind="amber">{w.error} <button className="text-button" onClick={()=>void w.refresh()}>Retry connection</button></Notice></div>}<Routes><Route path="/" element={<Today/>}/><Route path="/discover" element={<Discover/>}/><Route path="/xray" element={<Xray/>}/><Route path="/products/:id" element={<ProductView/>}/><Route path="/market-gaps" element={<MarketGaps/>}/><Route path="/decisions" element={<DecisionRoom/>}/><Route path="/watchtower" element={<Watchtower/>}/><Route path="/suppliers" element={<Suppliers/>}/><Route path="/data-health" element={<DataHealth/>}/><Route path="/settings" element={<Settings/>}/><Route path="/products" element={<Navigate to="/discover" replace/>}/><Route path="/research" element={<Navigate to="/xray" replace/>}/><Route path="/watchlist" element={<Navigate to="/watchtower" replace/>}/><Route path="*" element={<div className="not-found"><h1>Let’s get you back on track.</h1><p>This page has moved in the new TrendSell workspace.</p><Link to="/" className="button primary">Back to Today<ArrowRight size={16}/></Link></div>}/></Routes></main><footer className="app-footer"><span><ShieldCheck size={13}/>Built on evidence. Made for better decisions.</span><span>TrendSell · China → Nigeria pilot</span></footer></div>
+ <Modal open={menu} onOpenChange={setMenu} title="TrendSell" description="Your opportunity workspace" drawer><div className="mobile-nav">{nav}</div></Modal><AuthDialog/><Toaster theme={theme==='dark'?'dark':'light'} position="bottom-right" closeButton/>
+ </div>;
+}
+function ChevronRightIcon(){return <span className="breadcrumb-divider">/</span>;}
+export default function App(){return <BrowserRouter><WorkspaceProvider><Shell/></WorkspaceProvider></BrowserRouter>;}

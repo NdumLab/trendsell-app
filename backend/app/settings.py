@@ -1,0 +1,31 @@
+import os
+from dataclasses import dataclass
+from dotenv import load_dotenv
+
+load_dotenv()
+
+@dataclass(frozen=True)
+class Settings:
+    environment: str = 'development'
+    database_url: str = 'sqlite:///./trendsell.db'
+    origins: tuple[str, ...] = ('http://localhost:3000', 'http://127.0.0.1:3000')
+    allow_registration: bool = True
+    research_daily_limit: int = 20
+
+    @classmethod
+    def from_env(cls):
+        env = os.getenv('APP_ENV', 'development')
+        url = os.getenv('DATABASE_URL', 'sqlite:///./trendsell.db' if env != 'production' else '')
+        origins = tuple(x.strip() for x in os.getenv('CORS_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000' if env != 'production' else '').split(',') if x.strip())
+        if env not in {'development', 'test', 'production'}:
+            raise ValueError('APP_ENV must be development, test, or production')
+        if not url:
+            raise ValueError('DATABASE_URL is required')
+        if '*' in origins or not origins:
+            raise ValueError('CORS_ORIGINS must be an explicit origin allowlist')
+        if env == 'production' and (not url.startswith('postgresql+psycopg://') or any(not x.startswith('https://') for x in origins)):
+            raise ValueError('Production requires postgresql+psycopg DATABASE_URL and HTTPS CORS_ORIGINS')
+        limit = int(os.getenv('RESEARCH_DAILY_LIMIT', '20'))
+        if limit < 1 or limit > 1000:
+            raise ValueError('RESEARCH_DAILY_LIMIT must be between 1 and 1000')
+        return cls(env, url, origins, os.getenv('ALLOW_REGISTRATION', 'false' if env == 'production' else 'true') == 'true', limit)
