@@ -65,7 +65,7 @@ class RateBucket(Base):
 
 class Database:
     def __init__(self, url):
-        kwargs = {'connect_args': {'check_same_thread': False}} if url.startswith('sqlite') else {}
+        kwargs = {'connect_args': {'check_same_thread': False}} if url.startswith('sqlite') else {'pool_pre_ping': True}
         if url in {'sqlite://', 'sqlite:///:memory:'}:
             kwargs['poolclass'] = StaticPool
         self.engine = create_engine(url, **kwargs)
