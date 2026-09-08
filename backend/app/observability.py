@@ -60,9 +60,33 @@ def configure_logging(level=logging.INFO):
 logger = configure_logging()
 
 
-def route_label(path):
-    """`/api/v1/products/<uuid>/evidence` becomes `/api/v1/products/:id/evidence`."""
-    return '/'.join(':id' if ID_SEGMENT.match(segment) else segment for segment in path.split('/'))
+#: Every label a worker will retain. A metric label set is a fixed vocabulary; anything
+#: past this bound is folded into `OVERFLOW_LABEL` rather than growing without limit.
+MAX_LABELS = 200
+OVERFLOW_LABEL = '<other>'
+#: Requests that matched no route. One label for all of them, whatever was asked for.
+UNMATCHED_LABEL = '<unmatched>'
+
+
+def route_label(path, route=None):
+    """The label for one request: the *matched route template*, never the raw path.
+
+    Review finding R07: labels were built by collapsing path segments that looked like
+    long hex ids, so every other client-controlled segment — including any unknown path,
+    which needs no authentication — became a dictionary key retained for the worker's
+    lifetime. Twenty unknown paths produced twenty permanent labels.
+
+    A matched route already has a bounded template (`/api/v1/products/{product_id}`), and
+    the router hands it to the middleware, so the template is the label. A request that
+    matched nothing gets one shared label: it is not a route, and its path is whatever the
+    caller typed. The segment-collapsing fallback stays only for callers with no route.
+    """
+    template = getattr(route, 'path', None)
+    if template:
+        return template
+    if route is None and path is not None:
+        return '/'.join(':id' if ID_SEGMENT.match(segment) else segment for segment in path.split('/'))
+    return UNMATCHED_LABEL
 
 
 class Counters:
@@ -81,8 +105,18 @@ class Counters:
         self.rate_limited = 0
         self.jobs = {}
 
-    def record(self, method, path, status, duration_ms):
-        label = f'{method} {route_label(path)}'
+    def _bounded(self, label):
+        """`label`, or the overflow label once this worker has seen enough of them.
+
+        Bounding the *set* is what keeps an unauthenticated caller from growing a worker's
+        memory one unknown path at a time (review finding R07).
+        """
+        if label in self.requests or len(self.requests) < MAX_LABELS:
+            return label
+        return OVERFLOW_LABEL
+
+    def record(self, method, path, status, duration_ms, route=None):
+        label = self._bounded(f'{method} {route_label(path, route)}')
         self.requests[label] = self.requests.get(label, 0) + 1
         self.status[str(status)] = self.status.get(str(status), 0) + 1
         bucket = self.duration_ms.setdefault(label, {'count': 0, 'total': 0.0, 'max': 0.0})

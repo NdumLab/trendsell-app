@@ -3,10 +3,10 @@
 A dump that loads is not proof of recovery. This walks the restored copy and reports:
 
 * table counts and the recorded schema revision;
-* record counts per workspace, so a tenant that lost rows is visible rather than averaged
-  away in a total;
+* record counts per workspace, keyed by workspace id — two workspaces may share a display
+  name, and grouping by name would merge them and hide a tenant that lost rows;
 * whether every saved assessment still replays to the values it was stored with, under the
-  formula version it recorded.
+  formula version, threshold version and evidence reading it recorded.
 
 The last check is the one that matters for this product: a restore that returns rows but
 whose assessments no longer reproduce is not a recovery of the decisions people made.
@@ -31,6 +31,9 @@ from app import migrate  # noqa: E402
 from app.db import Record, Workspace  # noqa: E402
 from app.economics import Inputs, calculate  # noqa: E402
 
+#: Assessments saved before decision gates were versioned were saved under the first set.
+LEGACY_THRESHOLD_VERSION = 'decision-gates/1.0.0'
+
 REPLAYED_FIELDS = ('decision', 'scenarios', 'blockers', 'confidence', 'currency', 'market')
 
 
@@ -41,11 +44,15 @@ def inspect_database(url):
         report['schema_revision'] = migrate.current_revision(engine)
         report['expected_revision'] = migrate.head_revision(url)
         with engine.connect() as connection:
+            # Keyed by id, never by display name: review finding R06 found two workspaces
+            # sharing a name collapsing into one row, which is precisely the case where
+            # per-tenant reconciliation matters.
             report['workspaces'] = {
-                name: count for name, count in connection.execute(
-                    select(Workspace.name, func.count(Record.id))
+                workspace_id: {'name': name, 'records': count}
+                for workspace_id, name, count in connection.execute(
+                    select(Workspace.id, Workspace.name, func.count(Record.id))
                     .select_from(Workspace).outerjoin(Record, Record.workspace_id == Workspace.id)
-                    .group_by(Workspace.name)).all()
+                    .group_by(Workspace.id, Workspace.name)).all()
             }
             kinds = Counter()
             replay_failures = []
@@ -56,16 +63,26 @@ def inspect_database(url):
                     continue
                 payload = record['payload']
                 checked += 1
+                # An assessment replays under everything it was saved with. Review
+                # finding R06: the evidence reading was omitted, so confidence and
+                # coverage defaulted to zero and every evidence-bearing assessment was
+                # reported as corrupt on an untouched database. A record saved before
+                # evidence existed has no reading, and correctly replays without one.
+                threshold_version = payload.get('threshold_version', LEGACY_THRESHOLD_VERSION)
                 try:
                     replayed = calculate(Inputs(**payload['inputs']),
-                                         formula_version=payload['formula_version'])
+                                         payload.get('evidence_quality'),
+                                         formula_version=payload['formula_version'],
+                                         threshold_version=threshold_version)
                 except Exception as error:  # noqa: BLE001 - report, do not abort the sweep
                     replay_failures.append({'id': record['id'], 'error': repr(error)})
                     continue
                 differing = [field for field in REPLAYED_FIELDS if replayed[field] != payload[field]]
                 if differing:
                     replay_failures.append({'id': record['id'], 'fields': differing,
-                                            'formula_version': payload['formula_version']})
+                                            'formula_version': payload['formula_version'],
+                                            'threshold_version': threshold_version,
+                                            'had_evidence_reading': bool(payload.get('evidence_quality'))})
             report['records_by_kind'] = dict(sorted(kinds.items()))
             report['assessments_checked'] = checked
             report['assessment_replay_failures'] = replay_failures
@@ -110,7 +127,8 @@ def main(argv=None):
     if problems:
         return 1
     print(f'OK: schema at {report["schema_revision"]}, '
-          f'{sum(report["records_by_kind"].values())} records across {len(report["workspaces"])} workspaces, '
+          f'{sum(report["records_by_kind"].values())} records across {len(report["workspaces"])} workspaces '
+          f'(reconciled by id), '
           f'{report["assessments_checked"]} assessments replayed')
     return 0
 

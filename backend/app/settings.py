@@ -19,6 +19,10 @@ class Settings:
     register_ip_hourly_limit: int = 10
     #: Writes per workspace per minute, so one busy workspace cannot crowd out another.
     workspace_write_minute_limit: int = 60
+    #: Shared secret for the operational metrics surface (review finding R07). Counters
+    #: are fleet-wide, so they are not a workspace's to read: owning a workspace is not
+    #: operating the service. Unset means the surface is off, which is the default.
+    metrics_token: str = ''
 
     @classmethod
     def from_env(cls):
@@ -48,4 +52,5 @@ class Settings:
                    hourly('LOGIN_IP_HOURLY_LIMIT', 30),
                    hourly('LOGIN_ACCOUNT_HOURLY_LIMIT', 10),
                    hourly('REGISTER_IP_HOURLY_LIMIT', 10),
-                   hourly('WORKSPACE_WRITE_MINUTE_LIMIT', 60))
+                   hourly('WORKSPACE_WRITE_MINUTE_LIMIT', 60),
+                   os.getenv('METRICS_TOKEN', ''))

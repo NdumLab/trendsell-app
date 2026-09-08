@@ -20,9 +20,22 @@ const fields=fieldGroups.flatMap(g=>g.fields);
 const initial=()=>Object.fromEntries(fields.map(f=>[f.key,''])) as Record<NumericKey,string>;
 export default function DecisionRoom(){
  const w=useWorkspace();const [params,setParams]=useSearchParams();const requested=params.get('product');
- // A product linked from elsewhere may sit past the loaded page, so read it by id (T05).
- const linked=useQuery({queryKey:['product',requested],queryFn:()=>api<Product>(`/products/${requested}`),enabled:!!requested&&!w.demo&&!w.products.some(p=>p.id===requested),retry:false});
- const product=w.products.find(p=>p.id===requested)||(requested?linked.data:undefined)||w.products[0];
+ // Which product is open. The list is the *menu*; it is never the reading (see below).
+ const listed=w.products.find(p=>p.id===requested)||w.products[0];
+ const selectedId=requested||listed?.id;
+ /** The authoritative reading for the open product.
+  *
+  *  Review finding R01: the list endpoint returns stored product payloads, which carry no
+  *  computed `evidence_quality` and no current evidence records. This screen preferred the
+  *  list object and only fetched the detail when the product was *absent* from the loaded
+  *  pages — so an ordinary, recently created product, which is always on the first page,
+  *  never received the evidence reading the calculator needs. The draft showed confidence
+  *  0 and INSUFFICIENT EVIDENCE while the server saved the same inputs as WATCH at 60.
+  *
+  *  The detail is now read for whichever product is open, page or no page. Recording
+  *  evidence or deciding a review invalidates these queries, so the reading refreshes. */
+ const detail=useQuery({queryKey:['product',selectedId],queryFn:()=>api<Product>(`/products/${selectedId}`),enabled:!!selectedId&&!w.demo,retry:false});
+ const product=w.demo?listed:(detail.data??listed);
  const options=product&&!w.products.some(p=>p.id===product.id)?[product,...w.products]:w.products;
  const [values,setValues]=useState(initial);const [stress,setStress]=useState(10);const [channel,setChannel]=useState('Direct sales');const [shipping,setShipping]=useState<'Air'|'Sea'>('Air');const [compliance,setCompliance]=useState<'unresolved'|'prohibited'>('unresolved');const [busy,setBusy]=useState(false);const [saved,setSaved]=useState<Assessment|null>(null);const [history,setHistory]=useState(false);const [scenario,setScenario]=useState(1);
  // One key per logical submission. A failed save keeps it so the retry is idempotent;
@@ -45,7 +58,9 @@ export default function DecisionRoom(){
  const inputs={...Object.fromEntries(fields.map(f=>[f.key,+values[f.key]])),stress_pct:stress,compliance,channel,shipping} as Inputs;
  // A real workspace's gate comes from the server on save; the browser shows the same
  // reading it was given rather than inventing one (D03).
- const liveGate=useMemo<EvidenceGate|undefined>(()=>product?.evidence_quality?{confidence:product.evidence_quality.confidence,coverage:product.evidence_quality.coverage,compliance_resolved:product.evidence_quality.compliance_resolved,overall:product.evidence_quality.overall,observation_ids:product.evidence_quality.observation_ids}:undefined,[product?.evidence_quality]);
+ // Only ever the server's own reading. `compliance_status` carries the reviewed state, so
+ // a reviewer's rejection decides the draft exactly as it decides the saved record (R04).
+ const liveGate=useMemo<EvidenceGate|undefined>(()=>detail.data?.evidence_quality?{confidence:detail.data.evidence_quality.confidence,coverage:detail.data.evidence_quality.coverage,compliance_resolved:detail.data.evidence_quality.compliance_resolved,overall:detail.data.evidence_quality.overall,observation_ids:detail.data.evidence_quality.observation_ids,compliance_status:detail.data.compliance?.status}:undefined,[detail.data]);
  const gate=w.demo?(demoGate??undefined):liveGate;
  const result=useMemo(()=>valid?calculate(inputs,gate):null,[JSON.stringify(inputs),valid,gate]);
  const active=result?.scenarios[scenario],base=result?.scenarios[1];
@@ -69,8 +84,12 @@ export default function DecisionRoom(){
    schema:'trendsell-assessment-export/1', source:'unsaved draft', exported_at:new Date().toISOString(),
    demo:w.demo, saved:false,
    product:product?{id:product.id,name:product.name,asin:product.asin}:null,
-   formula_version:a.formula_version, threshold_version:THRESHOLD_VERSION, evidence_version:w.demo?'demo-fixture/1':'no-observations/1',
-   evidence:product?.observations||[], assessment:a},null,2));
+   // The draft's provenance is the reading it was calculated from, not a constant: it
+   // used to claim `no-observations/1` while showing a score derived from real records
+   // (R01). With no reading yet, it says so rather than naming a method it did not use.
+   formula_version:a.formula_version, threshold_version:THRESHOLD_VERSION,
+   evidence_version:w.demo?'demo-fixture/1':(detail.data?.evidence_quality?.method_version??'no-observations/1'),
+   evidence:w.demo?(product?.observations||[]):(detail.data?.observations||[]), assessment:a},null,2));
  if(w.loading)return <Loading/>;
  return <><PageTitle eyebrow="BEFORE YOU COMMIT" title="Make the decision yours." description="Real quotes. Editable assumptions. A clear view of what could go wrong." actions={<button className="button secondary" onClick={()=>setHistory(true)}><History size={16}/>Saved decisions<span className="count-badge">{w.decisionTotal}</span></button>}/>
  {!product?<div className="panel"><Empty title="Start with a product worth investigating." action={<Link to="/xray" className="button primary">Analyze a product<ArrowRight size={16}/></Link>}>Decision Room connects a product’s evidence to your commercial assumptions. Capture a product first, or explore the explicitly labeled demo.</Empty></div>:<>
@@ -78,7 +97,7 @@ export default function DecisionRoom(){
  <Notice kind={w.demo?'amber':'muted'}>{w.demo?'All prefilled figures are illustrative demo assumptions, including FX and import rates. They are not market quotes or regulatory guidance.':'Enter your own quotes, fees, FX, and import assumptions. No rates are supplied automatically. A reviewed classification is required before GO.'}</Notice>
  <div className="decision-room-layout"><section className="panel assumptions"><div className="section-heading"><div><h2>Your commercial inputs</h2><p>All amounts below come from you.</p></div><SlidersHorizontal size={18}/></div><form onSubmit={async e=>{e.preventDefault();if(!result)return;if(!w.requireUser())return;setBusy(true);try{const a=await w.saveDecision(result,product,submissionKey.current);setSaved(a);submissionKey.current=crypto.randomUUID();toast.success('Decision saved with its exact inputs and formula version');}catch(e){toast.error((e as Error).message);}finally{setBusy(false);}}}>
  {fieldGroups.map(g=><fieldset key={g.title}><legend>{g.title}</legend><div className="input-grid">{g.fields.map(f=><label className={f.help?'wide-input':''} key={f.key}>{f.label}<div className="unit-input"><input aria-label={f.label} type="number" required min={f.min} max={f.max} step={f.step||'any'} value={values[f.key]} placeholder="Enter value" onChange={e=>{setValues({...values,[f.key]:e.target.value});restartSubmission();}}/><span>{f.unit}</span></div>{f.help&&<small>{f.help}</small>}</label>)}</div></fieldset>)}
- <fieldset><legend>Route & readiness</legend><div className="input-grid"><label>Sales channel<select value={channel} onChange={e=>{setChannel(e.target.value);restartSubmission();}}>{['Direct sales','Jumia','Konga','Retail / wholesale','Other'].map(c=><option key={c}>{c}</option>)}</select></label><label>Freight mode<select value={shipping} onChange={e=>{setShipping(e.target.value as 'Air'|'Sea');restartSubmission();}}><option>Air</option><option>Sea</option></select></label><label className="wide-input">Import status<select value={compliance} onChange={e=>{setCompliance(e.target.value as 'unresolved'|'prohibited');restartSubmission();}}><option value="unresolved">Classification / requirements unresolved</option><option value="prohibited">Marked prohibited — block launch</option></select><small>A self-entered assumption cannot clear the compliance gate.</small></label></div></fieldset>
+ <fieldset><legend>Route & readiness</legend><div className="input-grid"><label>Sales channel<select value={channel} onChange={e=>{setChannel(e.target.value);restartSubmission();}}>{['Direct sales','Jumia','Konga','Retail / wholesale','Other'].map(c=><option key={c}>{c}</option>)}</select></label><label>Freight mode<select value={shipping} onChange={e=>{setShipping(e.target.value as 'Air'|'Sea');restartSubmission();}}><option>Air</option><option>Sea</option></select></label><label className="wide-input">Import status<select value={compliance} onChange={e=>{setCompliance(e.target.value as 'unresolved'|'prohibited');restartSubmission();}}><option value="unresolved">Classification / requirements unresolved</option><option value="prohibited">Marked prohibited — block launch</option></select><small>A self-entered assumption cannot clear the compliance gate, and you do not need to restate a reviewer here — an import-readiness decision applies to this assessment on its own.</small></label></div></fieldset>
  <div className="stress-control"><div><label htmlFor="stress">Scenario stress range</label><strong>±{stress}%</strong></div><input id="stress" aria-label="Scenario stress range" type="range" min="0" max="50" value={stress} onChange={e=>{setStress(+e.target.value);restartSubmission();}}/><p>Downside: selling price falls {stress}%, supplier and freight costs rise {stress}%. Upside reverses those changes. These are scenarios, not forecasts.</p></div>
  <button className="button primary full" type="submit" disabled={!valid||busy||!product.confirmed}><Save size={16}/>{busy?'Saving…':'Save this decision'}</button>{!product.confirmed&&<p className="form-error">Confirm product identity in X-Ray before saving.</p>}
  </form></section><div className="scenario-output">{result&&base&&active?<>

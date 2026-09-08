@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.db import Record
+from app.main import EXPORT_KINDS, EXPORT_SCHEMA
 from conftest import HEADERS
 
 COUNT = 250
@@ -138,16 +139,22 @@ def test_the_export_carries_every_record_kind_and_names_its_schema(client, owner
         'lead_days': 25, 'quote_date': '2026-09-01', 'incoterm': 'FOB'})
     client.post('/api/v1/watchlists/default/items', json={'product_id': job['product_id']}, headers=HEADERS)
     body = json.loads(client.get('/api/v1/export').text)
-    assert body['schema'] == 'trendsell-workspace-export/1'
-    assert body['counts'] == {'products': 1, 'research_jobs': 1, 'decisions': 1, 'quotes': 1, 'watches': 1}
-    for name in ('products', 'research_jobs', 'decisions', 'quotes', 'watches'):
-        assert len(body[name]) == 1, name
+    assert body['schema'] == EXPORT_SCHEMA
+    # Every kind the export contract names is present, and the ones this test created
+    # carry exactly one record. Derived from EXPORT_KINDS, so a kind added to the
+    # application without being added to the export fails here rather than passing (R05).
+    created = {'products', 'research_jobs', 'decisions', 'quotes', 'watches'}
+    assert set(body['counts']) == {name for _, name in EXPORT_KINDS}
+    for _, name in EXPORT_KINDS:
+        assert name in body, name
+        assert len(body[name]) == body['counts'][name], name
+        assert len(body[name]) == (1 if name in created else 0), name
     assert body['decisions'][0]['product_id'] == job['product_id']
 
 
 def test_the_export_is_scoped_to_the_signed_in_workspace(client, big_workspace, second_client, stranger):
     stranger_export = json.loads(second_client.get('/api/v1/export').text)
-    assert stranger_export['counts'] == {'products': 0, 'research_jobs': 0, 'decisions': 0, 'quotes': 0, 'watches': 0}
+    assert stranger_export['counts'] == {name: 0 for _, name in EXPORT_KINDS}
     assert stranger_export['workspace_id'] != json.loads(client.get('/api/v1/export').text)['workspace_id']
     assert second_client.get('/api/v1/products').json()['total'] == 0
 
@@ -215,3 +222,105 @@ def test_summary_counts_saved_decisions_separately_from_product_evidence(client,
     body = client.get('/api/v1/summary').json()
     assert body['products'] == 1 and body['decisions'] == 1
     assert body['decisions_go'] == 0
+
+
+# --- R05: the export is the whole workspace, not the kinds that existed first --------
+#
+# Review finding R05: `evidence` and `compliance_review` were never added to EXPORT_KINDS,
+# so a workspace holding four evidence records and two reviews exported neither — and the
+# `compliance_review_id` on a saved decision referenced a record the export did not carry.
+
+REVIEW_REQUEST = {
+    'specifications': '1500 W handheld garment steamer, 260 ml tank, 220 V, 0.9 kg.',
+    'intended_use': 'Retail sale to consumers in Lagos',
+    'question': 'Which classification applies before import?',
+    'hs_code_candidate': '8451.30',
+    'destination': 'NG',
+}
+
+
+def evidence_body(**overrides):
+    from datetime import datetime, timedelta, timezone
+    return {'metric': 'Search interest', 'value': 68, 'unit': 'index / 100', 'market': 'US',
+            'observed_at': (datetime.now(timezone.utc) - timedelta(days=5)).strftime('%Y-%m-%d'),
+            'source_name': 'Google Trends export', 'source_url': 'https://trends.google.com/x',
+            'method': 'Read the latest weekly point from the exported series.', 'notes': '',
+            **overrides}
+
+
+@pytest.fixture
+def researched(client, owner):
+    """A product carrying evidence and a review history, as a real workspace would."""
+    job = client.post('/api/v1/xray', json={'input': 'https://www.amazon.com/dp/B0ABCDEFGH'},
+                      headers={**HEADERS, 'Idempotency-Key': 'r05'}).json()
+    product_id = job['product_id']
+    client.post(f'/api/v1/products/{product_id}/confirm', json={'name': 'Steamer'}, headers=HEADERS)
+    for metric, market in [('Search interest', 'US'), ('Review velocity', 'US'),
+                           ('Marketplace rank', 'US'), ('Local listing price', 'NG')]:
+        assert client.post(f'/api/v1/products/{product_id}/evidence',
+                           json=evidence_body(metric=metric, market=market,
+                                              source_name=f'{metric} source'),
+                           headers=HEADERS).status_code == 201
+    # Two reviews, so the export has to carry the superseded one as well as the current.
+    first = client.post(f'/api/v1/products/{product_id}/compliance/requests',
+                        json={**REVIEW_REQUEST, 'product_id': product_id}, headers=HEADERS).json()
+    client.post(f'/api/v1/compliance/reviews/{first["id"]}/decision',
+                json={'status': 'more_information', 'rationale': 'Send the full specification sheet.'},
+                headers=HEADERS)
+    second = client.post(f'/api/v1/products/{product_id}/compliance/requests',
+                         json={**REVIEW_REQUEST, 'product_id': product_id}, headers=HEADERS).json()
+    return {'product_id': product_id, 'first_review': first['id'], 'second_review': second['id']}
+
+
+def test_the_export_carries_evidence_and_review_records(client, researched):
+    body = json.loads(client.get('/api/v1/export').text)
+    assert body['counts']['evidence'] == 4
+    assert body['counts']['compliance_reviews'] == 2
+    assert len(body['evidence']) == 4 and len(body['compliance_reviews']) == 2
+
+
+def test_exported_evidence_does_not_depend_on_having_been_assessed(client, researched):
+    """The regression's sharpest edge: evidence never saved into an assessment was absent
+    from the export entirely, because only decisions embedded a snapshot."""
+    assert not json.loads(client.get('/api/v1/decisions').text)['decisions'], 'no assessment saved'
+    exported = json.loads(client.get('/api/v1/export').text)['evidence']
+    assert len(exported) == 4
+    assert {record['metric'] for record in exported} == {
+        'Search interest', 'Review velocity', 'Marketplace rank', 'Local listing price'}
+
+
+def test_the_export_carries_superseded_reviews_and_their_sources(client, researched):
+    reviews = json.loads(client.get('/api/v1/export').text)['compliance_reviews']
+    by_id = {review['id']: review for review in reviews}
+    assert by_id[researched['first_review']]['superseded_by'] == researched['second_review']
+    assert by_id[researched['second_review']]['supersedes'] == researched['first_review']
+
+
+def test_a_saved_decision_resolves_its_review_reference_inside_the_export(client, researched):
+    """`compliance_review_id` has to name a record the export actually contains."""
+    client.post('/api/v1/decisions',
+                json={'product_id': researched['product_id'], 'inputs': INPUTS},
+                headers={**HEADERS, 'Idempotency-Key': 'r05d'})
+    body = json.loads(client.get('/api/v1/export').text)
+    referenced = body['decisions'][0]['compliance_review_id']
+    assert referenced == researched['second_review']
+    assert referenced in {review['id'] for review in body['compliance_reviews']}
+
+
+def test_the_export_reconciles_with_what_the_database_holds(client, researched):
+    """Counts are not the export's own opinion: they must match the stored rows."""
+    body = json.loads(client.get('/api/v1/export').text)
+    with client.app.state.database.session() as db:
+        for kind, name in EXPORT_KINDS:
+            stored = db.query(Record).filter_by(workspace_id=body['workspace_id'], kind=kind).count()
+            assert body['counts'][name] == stored == len(body[name]), name
+        # And no record kind the workspace holds is missing from the export contract.
+        kinds = {kind for (kind,) in db.query(Record.kind)
+                 .filter_by(workspace_id=body['workspace_id']).distinct()}
+    assert kinds <= {kind for kind, _ in EXPORT_KINDS}, 'a stored kind is not exported'
+
+
+def test_a_foreign_workspace_exports_none_of_it(client, researched, second_client, stranger):
+    body = json.loads(second_client.get('/api/v1/export').text)
+    assert body['counts']['evidence'] == 0 and body['counts']['compliance_reviews'] == 0
+    assert body['evidence'] == [] and body['compliance_reviews'] == []

@@ -6,7 +6,7 @@ import type { Inputs } from '@/types';
 
 interface Case { name: string; inputs: Inputs; evidence: EvidenceGate; expected: ReturnType<typeof calculate> }
 const read = (file: string) => JSON.parse(readFileSync(new URL(`../../../contracts/${file}`, import.meta.url), 'utf8')) as
-  { formula_version: string; threshold_version?: string; cases: Case[] };
+  { formula_version: string; threshold_version: string; cases: Case[] };
 const contract = read('economics_cases.json');
 const legacy = read('economics_legacy_cases.json');
 /** Two decimal places need value*100 to stay an exact integer double. */
@@ -74,7 +74,9 @@ describe('superseded formula versions still replay', () => {
   });
 
   it.each(legacy.cases.map(c => [c.name, c] as const))('%s replays to its saved values', (_name, testCase) => {
-    expect(calculate(testCase.inputs, testCase.evidence, legacy.formula_version)).toEqual(testCase.expected);
+    // Replayed under the versions it was saved with: arithmetic and decision rules are
+    // versioned independently, so both come from the frozen contract (R04, R06).
+    expect(calculate(testCase.inputs, testCase.evidence, legacy.formula_version, legacy.threshold_version)).toEqual(testCase.expected);
   });
 
   it('refuses an unknown version rather than silently using the current one', () => {

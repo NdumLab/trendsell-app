@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import money as m
 
 FORMULA_VERSION = 'unit-economics/1.1.0'
-THRESHOLD_VERSION = 'decision-gates/1.0.0'
+THRESHOLD_VERSION = 'decision-gates/1.1.0'
 
 
 class Inputs(BaseModel):
@@ -43,7 +43,8 @@ class Inputs(BaseModel):
     shipping: Literal['Air', 'Sea'] = 'Air'
 
 
-NO_EVIDENCE = {'confidence': 0, 'coverage': False, 'compliance_resolved': False, 'overall': None, 'observation_ids': []}
+NO_EVIDENCE = {'confidence': 0, 'coverage': False, 'compliance_resolved': False, 'overall': None,
+               'observation_ids': [], 'compliance_status': 'none'}
 
 
 def money(value):
@@ -126,8 +127,13 @@ SCENARIO_FORMULAS = {
 }
 
 
-def gates(scenarios, inputs, evidence):
-    """The decision gates. Unchanged by T04 and versioned separately as THRESHOLD_VERSION."""
+#: What a reviewer's rejection says, in the assessment as well as on the screen.
+REJECTED_BLOCKER = 'A reviewer rejected this product for import. Do not proceed.'
+PROHIBITED_BLOCKER = 'The product is marked prohibited. Do not proceed.'
+
+
+def _blockers(scenarios, inputs, evidence):
+    """The advisory blockers. Identical in both threshold versions."""
     base, downside = scenarios[1], scenarios[0]
     blockers = []
     if not evidence['coverage']: blockers.append('Collect independent demand signals and destination-market evidence.')
@@ -135,18 +141,64 @@ def gates(scenarios, inputs, evidence):
     if evidence['confidence'] < 70: blockers.append('Raise evidence confidence to at least 70 before committing inventory.')
     if base['margin_pct'] < 25: blockers.append('Raise base contribution margin to at least 25%.')
     if downside['margin_pct'] < 10: blockers.append('Keep downside contribution margin at or above 10%.')
+    return blockers
+
+
+def _decide(scenarios, evidence, blockers):
+    """The evidence/economics ladder, once nothing has forced NO-GO."""
+    base = scenarios[1]
+    if evidence['confidence'] < 40 or not evidence['coverage']:
+        return 'INSUFFICIENT EVIDENCE'
+    if base['margin_pct'] < 15 or (evidence['overall'] is not None and evidence['overall'] < 55):
+        return 'NO-GO'
+    if not blockers and (evidence['overall'] or 0) >= 75:
+        return 'GO'
+    return 'WATCH'
+
+
+def _gates_v1_0_0(scenarios, inputs, evidence):
+    """The gates the pilot shipped: only the user's own dropdown can force NO-GO.
+
+    Frozen. Assessments saved under this version replay to the values they were saved
+    with, including the ones review finding R04 identifies as wrong.
+    """
+    blockers = _blockers(scenarios, inputs, evidence)
     if inputs.compliance == 'prohibited':
-        decision = 'NO-GO'
-        blockers.insert(0, 'The product is marked prohibited. Do not proceed.')
-    elif evidence['confidence'] < 40 or not evidence['coverage']:
-        decision = 'INSUFFICIENT EVIDENCE'
-    elif base['margin_pct'] < 15 or (evidence['overall'] is not None and evidence['overall'] < 55):
-        decision = 'NO-GO'
-    elif not blockers and (evidence['overall'] or 0) >= 75:
-        decision = 'GO'
-    else:
-        decision = 'WATCH'
-    return decision, blockers
+        return 'NO-GO', [PROHIBITED_BLOCKER] + blockers
+    return _decide(scenarios, evidence, blockers), blockers
+
+
+def _gates_v1_1_0(scenarios, inputs, evidence):
+    """The current gates: a reviewer's rejection is authoritative (review finding R04).
+
+    Under 1.0.0 the gate text said "a reviewer rejected this product for import; do not
+    proceed" while the decision beside it read WATCH, because the rejection reached the
+    screen but never reached the calculation — only the user re-stating it in a dropdown
+    did. A reviewer decision is the authority on import readiness, so it decides here.
+
+    `compliance_status` is the reviewed state from the review workflow, computed on the
+    server. It is absent from assessments saved before this version, and a missing value
+    means "no reviewer has rejected this", which reproduces 1.0.0 exactly.
+    """
+    blockers = _blockers(scenarios, inputs, evidence)
+    if evidence.get('compliance_status') == 'rejected':
+        return 'NO-GO', [REJECTED_BLOCKER] + blockers
+    if inputs.compliance == 'prohibited':
+        return 'NO-GO', [PROHIBITED_BLOCKER] + blockers
+    return _decide(scenarios, evidence, blockers), blockers
+
+
+GATE_RULES = {
+    'decision-gates/1.0.0': _gates_v1_0_0,
+    'decision-gates/1.1.0': _gates_v1_1_0,
+}
+
+
+def gates(scenarios, inputs, evidence, threshold_version: str = THRESHOLD_VERSION):
+    """The decision gates for `threshold_version`."""
+    if threshold_version not in GATE_RULES:
+        raise ValueError(f'unknown threshold version: {threshold_version}')
+    return GATE_RULES[threshold_version](scenarios, inputs, evidence)
 
 
 def economics_summary(scenarios):
@@ -173,17 +225,19 @@ def economics_summary(scenarios):
             'viable': not failures, 'failures': failures, 'threshold_version': THRESHOLD_VERSION}
 
 
-def calculate(inputs: Inputs, evidence=None, formula_version: str = FORMULA_VERSION):
+def calculate(inputs: Inputs, evidence=None, formula_version: str = FORMULA_VERSION,
+              threshold_version: str = THRESHOLD_VERSION):
     """Scenarios and gates for `inputs`.
 
-    `formula_version` exists so a stored assessment replays under the version it was
-    saved with. Callers producing a *new* assessment must leave it at the default.
+    `formula_version` and `threshold_version` exist so a stored assessment replays under
+    the versions it was saved with — the arithmetic and the decision rules move
+    independently. Callers producing a *new* assessment must leave both at the default.
     """
     if formula_version not in SCENARIO_FORMULAS:
         raise ValueError(f'unknown formula version: {formula_version}')
-    evidence = evidence or dict(NO_EVIDENCE)
+    evidence = {**NO_EVIDENCE, **(evidence or {})}
     scenarios = SCENARIO_FORMULAS[formula_version](inputs)
-    decision, blockers = gates(scenarios, inputs, evidence)
+    decision, blockers = gates(scenarios, inputs, evidence, threshold_version)
     return {'formula_version': formula_version, 'truth_state': 'Calculated', 'currency': 'NGN', 'market': 'NG',
             'decision': decision, 'confidence': evidence['confidence'], 'observation_ids': evidence['observation_ids'],
             'blockers': blockers, 'scenarios': scenarios, 'inputs': inputs.model_dump(), 'input_truth_state': 'User input'}

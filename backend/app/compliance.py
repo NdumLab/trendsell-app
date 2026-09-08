@@ -22,7 +22,7 @@ from. Software acceptance does not establish classification correctness; the rev
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 REVIEW_VERSION = 'compliance-review/1.0.0'
 STATUSES = ('requested', 'approved', 'rejected', 'more_information', 'superseded')
@@ -66,6 +66,25 @@ class RuleSource(BaseModel):
             raise ValueError('A regulatory source must be a full https:// address.')
         return value
 
+    @field_validator('effective_from', 'effective_to')
+    @classmethod
+    def a_real_calendar_date(cls, value):
+        """Review finding R03: the pattern accepted `2026-13-45`. A date that cannot exist
+        cannot say when a rule came into force."""
+        if value is None:
+            return value
+        try:
+            datetime.strptime(value, '%Y-%m-%d')
+        except ValueError:
+            raise ValueError('An effective date must be a real calendar date, as YYYY-MM-DD.')
+        return value
+
+    @model_validator(mode='after')
+    def the_period_runs_forwards(self):
+        if self.effective_to and self.effective_to < self.effective_from:
+            raise ValueError('A source cannot stop being effective before it starts.')
+        return self
+
 
 class ReviewDecision(BaseModel):
     """A reviewer's answer. An approval must cite what it rests on."""
@@ -76,6 +95,9 @@ class ReviewDecision(BaseModel):
     requirements: list[str] = Field(default_factory=list, max_length=30)
     sources: list[RuleSource] = Field(default_factory=list, max_length=20)
     validity_days: int = Field(default=DEFAULT_VALIDITY_DAYS, ge=1, le=MAX_VALIDITY_DAYS)
+    #: An approval that lists no requirements must say so deliberately. Silence is not a
+    #: finding, and review finding R03 found an empty list clearing the gate (R03).
+    no_additional_requirements: bool = False
 
     @field_validator('requirements')
     @classmethod
@@ -85,17 +107,89 @@ class ReviewDecision(BaseModel):
                 raise ValueError('Each requirement must be a sentence, not a placeholder.')
         return value
 
+    @model_validator(mode='after')
+    def an_approval_states_what_it_approved(self):
+        """Review finding R03: an approval cleared the gate with no classification and no
+        requirements. An approval is a determination about a specific classification, so
+        it has to name one and say what it found."""
+        if self.status != 'approved':
+            return self
+        if not self.hs_code.strip():
+            raise ValueError('An approval must record the classification it reviewed.')
+        if not self.requirements and not self.no_additional_requirements:
+            raise ValueError('List the requirements found, or record explicitly that no '
+                             'additional requirements apply.')
+        return self
+
+    @field_validator('hs_code')
+    @classmethod
+    def digits_and_dots_only(cls, value):
+        if value and not all(character.isdigit() or character == '.' for character in value):
+            raise ValueError('An HS code is digits, optionally separated by dots.')
+        return value
+
+
+def source_is_in_force(source, moment):
+    """Whether one cited publication is in force on `moment` (a date string)."""
+    if source.get('effective_from', '') > moment:
+        return False                              # not yet in force
+    ends = source.get('effective_to')
+    return not ends or ends >= moment             # inclusive of its final day
+
+
+def sources_in_force(sources, now=None):
+    """The cited publications that are in force right now.
+
+    Review finding R03: effective dates were stored and shown but never consulted, so an
+    approval could rest entirely on a rule that stopped applying in 2011 and the gate
+    still read `resolved`. Support that is expired or not yet in force is not support.
+    """
+    moment = (now or datetime.now(timezone.utc)).date().isoformat()
+    return [source for source in (sources or []) if source_is_in_force(source, moment)]
+
+
+def approval_support(sources, now=None):
+    """``(ok, reason)`` — whether these sources can support an approval at `now`."""
+    if not sources:
+        return False, 'An approval must cite the official sources it rests on.'
+    if not sources_in_force(sources, now):
+        return False, ('Every cited source is expired or not yet in force. An approval must '
+                       'rest on a publication that applies today.')
+    return True, ''
+
 
 def approval_is_current(review, now=None):
-    """True only for an approval that exists, has not expired and was not superseded."""
+    """True only for an approval that exists, has not expired, was not superseded, and
+    still rests on a publication that is in force (review finding R03).
+
+    The support check is applied on read as well as at decision time, so an approval that
+    was already stored before this rule existed cannot keep clearing the gate on lapsed
+    evidence.
+    """
     if not review or review.get('status') != 'approved' or review.get('superseded_by'):
         return False
     expires = review.get('expires_at')
-    return bool(expires) and expires > (now or datetime.now(timezone.utc)).isoformat()
+    if not (expires and expires > (now or datetime.now(timezone.utc)).isoformat()):
+        return False
+    return bool(sources_in_force(review.get('sources'), now))
 
 
 def expiry(validity_days, now=None):
     return ((now or datetime.now(timezone.utc)) + timedelta(days=validity_days)).isoformat()
+
+
+def approval_expiry(validity_days, sources, now=None):
+    """When an approval lapses: its validity window, bounded by the support it cites.
+
+    An approval must not outlive the publication it rests on, so a source that stops
+    applying in 30 days ends the approval then rather than in 180 days (R03).
+    """
+    horizon = expiry(validity_days, now)
+    ends = [source['effective_to'] for source in (sources or []) if source.get('effective_to')]
+    if not ends:
+        return horizon
+    # Inclusive of the source's final day, in the same UTC ISO shape as `horizon`.
+    return min(horizon, f'{min(ends)}T23:59:59.999999+00:00')
 
 
 def gate_state(review, now=None):
@@ -109,6 +203,10 @@ def gate_state(review, now=None):
                 'reason': f'Approved by a reviewer on {review["decided_at"][:10]}, valid to {review["expires_at"][:10]}.',
                 'review_id': review.get('id'), 'expires_at': review.get('expires_at'),
                 'hs_code': review.get('hs_code'), 'requirements': review.get('requirements', [])}
+    if status == 'approved' and not sources_in_force(review.get('sources'), now):
+        return {'resolved': False, 'status': 'support_expired', 'review_id': review.get('id'),
+                'reason': 'Every source this approval cites has expired or is not yet in force. '
+                          'Request a fresh review.'}
     if status == 'approved':
         return {'resolved': False, 'status': 'expired', 'review_id': review.get('id'),
                 'reason': f'The approval expired on {str(review.get("expires_at"))[:10]}. Request a fresh review.'}

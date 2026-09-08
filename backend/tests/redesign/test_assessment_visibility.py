@@ -6,7 +6,7 @@ watchlist read that unchanged product verdict. The two were presented as one dec
 """
 import pytest
 
-from app.economics import Inputs, calculate, economics_summary
+from app.economics import THRESHOLD_VERSION, Inputs, calculate, economics_summary
 from conftest import HEADERS
 
 AMAZON = 'https://www.amazon.com/dp/B0ABCDEFGH'
@@ -112,7 +112,9 @@ def test_economics_summary_is_computed_from_scenarios_alone():
     loss = economics_summary(calculate(Inputs(**LOSS_MAKING))['scenarios'])
     assert loss['viable'] is False
     assert loss['contribution'] < 0
-    assert loss['threshold_version'] == 'decision-gates/1.0.0'
+    # The summary is stamped with the gates in force, whatever they are; the value is
+    # pinned by the shared contract, not restated here.
+    assert loss['threshold_version'] == THRESHOLD_VERSION
 
 
 def test_economics_summary_is_not_part_of_the_versioned_formula_output():

@@ -90,7 +90,11 @@ def test_the_legacy_contract_is_frozen_at_its_own_version():
 
 @pytest.mark.parametrize('case', LEGACY_CASES)
 def test_a_legacy_assessment_still_replays_to_its_saved_values(case):
-    replayed = calculate(Inputs(**case['inputs']), case['evidence'], formula_version=LEGACY['formula_version'])
+    # Replayed under the versions it was saved with: the arithmetic *and* the decision
+    # rules move independently, so both come from the frozen contract (R04, R06).
+    replayed = calculate(Inputs(**case['inputs']), case['evidence'],
+                         formula_version=LEGACY['formula_version'],
+                         threshold_version=LEGACY['threshold_version'])
     assert replayed == case['expected']
 
 

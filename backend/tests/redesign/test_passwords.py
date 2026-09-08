@@ -178,3 +178,75 @@ def test_the_shipped_configuration_costs_real_work(production_parameters):
     elapsed = time.perf_counter() - start
     assert elapsed > 0.05, f'verification took {elapsed * 1000:.0f} ms, which is too cheap'
     assert elapsed < 5, f'verification took {elapsed * 1000:.0f} ms, which would stall logins'
+
+
+# --- R02: the password is a secret, not a formatted field ---------------------------
+#
+# Review finding R02: `Credentials` inherited `str_strip_whitespace=True`, so the login
+# endpoint stripped a password before verifying it. The pilot hashed what was typed, so
+# every existing account whose password began or ended with a space was locked out — and
+# the hash helpers looked correct in isolation, because they were never handed the value
+# the endpoint had already altered. These cases therefore go through HTTP, not through
+# `verify_password`.
+
+PADDED = '  a-long-enough-password  '
+UNICODE = 'pässwörd-ünicode-Ω-1234'
+
+
+def test_a_password_reaches_the_hasher_exactly_as_typed(client):
+    """The regression itself: a legacy hash of a padded password must still sign in."""
+    owner = register(client)
+    with client.app.state.database.session() as db:
+        db.query(User).filter_by(id=owner['id']).update({'password_hash': legacy_hash(PADDED)})
+        db.commit()
+    client.post('/api/v1/auth/logout', json={}, headers=HEADERS)
+
+    response = client.post('/api/v1/auth/login',
+                           json={'email': 'owner@example.com', 'password': PADDED},
+                           headers=HEADERS)
+    assert response.status_code == 200, response.text
+
+
+def test_a_padded_password_survives_registration_and_sign_in(client):
+    client.post('/api/v1/auth/register',
+                json={'email': 'padded@example.com', 'password': PADDED, 'name': 'Padded'},
+                headers=HEADERS)
+    client.post('/api/v1/auth/logout', json={}, headers=HEADERS)
+
+    assert client.post('/api/v1/auth/login', json={'email': 'padded@example.com', 'password': PADDED},
+                       headers=HEADERS).status_code == 200
+    # And the stripped form is a different password, so it must not open the account.
+    assert client.post('/api/v1/auth/login', json={'email': 'padded@example.com', 'password': PADDED.strip()},
+                       headers=HEADERS).status_code == 401
+
+
+def test_a_unicode_password_survives_registration_and_sign_in(client):
+    client.post('/api/v1/auth/register',
+                json={'email': 'unicode@example.com', 'password': UNICODE, 'name': 'Unicode'},
+                headers=HEADERS)
+    client.post('/api/v1/auth/logout', json={}, headers=HEADERS)
+
+    assert client.post('/api/v1/auth/login', json={'email': 'unicode@example.com', 'password': UNICODE},
+                       headers=HEADERS).status_code == 200
+
+
+def test_length_limits_count_the_password_as_entered(client):
+    """Whitespace is part of the secret, so it counts toward the minimum length."""
+    response = client.post('/api/v1/auth/register',
+                           json={'email': 'short@example.com', 'password': ' ' * 11, 'name': 'Short'},
+                           headers=HEADERS)
+    assert response.status_code == 422
+    # Twelve characters of anything is accepted; the field is opaque, not inspected.
+    assert client.post('/api/v1/auth/register',
+                       json={'email': 'spaces@example.com', 'password': ' ' * 12, 'name': 'Spaces'},
+                       headers=HEADERS).status_code == 201
+
+
+def test_email_and_name_are_still_normalised(client):
+    """Only the password stopped being normalised."""
+    response = client.post('/api/v1/auth/register',
+                           json={'email': '  Mixed@Example.com  ', 'password': PASSWORD, 'name': '  Spaced  '},
+                           headers=HEADERS)
+    assert response.status_code == 201, response.text
+    assert response.json()['email'] == 'mixed@example.com'
+    assert response.json()['name'] == 'Spaced'

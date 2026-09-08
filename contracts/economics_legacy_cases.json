@@ -829,6 +829,125 @@
         },
         "input_truth_state": "User input"
       }
+    },
+    {
+      "name": "rejection-ignored-under-frozen-thresholds",
+      "evidence": {
+        "confidence": 64,
+        "coverage": true,
+        "compliance_resolved": false,
+        "overall": 64,
+        "observation_ids": [
+          "obs-1"
+        ],
+        "compliance_status": "rejected"
+      },
+      "inputs": {
+        "quantity": 300,
+        "unit_cost_usd": 8.4,
+        "fx_ngn": 1500,
+        "freight_ngn": 900000,
+        "duty_pct": 5,
+        "import_tax_pct": 7.5,
+        "selling_price_ngn": 32000,
+        "channel_fee_pct": 5,
+        "returns_pct": 3,
+        "marketing_ngn": 300000,
+        "fixed_cost_ngn": 150000,
+        "stress_pct": 10,
+        "compliance": "unresolved",
+        "channel": "Direct sales",
+        "shipping": "Air"
+      },
+      "expected": {
+        "formula_version": "unit-economics/1.0.0",
+        "truth_state": "Calculated",
+        "currency": "NGN",
+        "market": "NG",
+        "decision": "WATCH",
+        "confidence": 64,
+        "observation_ids": [
+          "obs-1"
+        ],
+        "blockers": [
+          "Obtain a reviewed product classification and current import requirements.",
+          "Raise evidence confidence to at least 70 before committing inventory."
+        ],
+        "scenarios": [
+          {
+            "name": "Downside",
+            "supplier": 13860.0,
+            "freight": 3300.0,
+            "duty": 858.0,
+            "import_tax": 1351.35,
+            "landed_cost": 19369.35,
+            "price": 28800.0,
+            "fees": 1440.0,
+            "returns": 864.0,
+            "marketing": 1000.0,
+            "overhead": 500.0,
+            "contribution": 5626.65,
+            "margin_pct": 19.54,
+            "cash_required": 6260805.0,
+            "break_even_cac": 6626.65,
+            "break_even_units": 64
+          },
+          {
+            "name": "Base",
+            "supplier": 12600.0,
+            "freight": 3000.0,
+            "duty": 780.0,
+            "import_tax": 1228.5,
+            "landed_cost": 17608.5,
+            "price": 32000.0,
+            "fees": 1600.0,
+            "returns": 960.0,
+            "marketing": 1000.0,
+            "overhead": 500.0,
+            "contribution": 10331.5,
+            "margin_pct": 32.29,
+            "cash_required": 5732550.0,
+            "break_even_cac": 11331.5,
+            "break_even_units": 39
+          },
+          {
+            "name": "Upside",
+            "supplier": 11340.0,
+            "freight": 2700.0,
+            "duty": 702.0,
+            "import_tax": 1105.65,
+            "landed_cost": 15847.65,
+            "price": 35200.0,
+            "fees": 1760.0,
+            "returns": 1056.0,
+            "marketing": 1000.0,
+            "overhead": 500.0,
+            "contribution": 15036.35,
+            "margin_pct": 42.72,
+            "cash_required": 5204295.0,
+            "break_even_cac": 16036.35,
+            "break_even_units": 28
+          }
+        ],
+        "inputs": {
+          "quantity": 300,
+          "unit_cost_usd": 8.4,
+          "fx_ngn": 1500.0,
+          "freight_ngn": 900000.0,
+          "duty_pct": 5.0,
+          "import_tax_pct": 7.5,
+          "selling_price_ngn": 32000.0,
+          "channel_fee_pct": 5.0,
+          "returns_pct": 3.0,
+          "marketing_ngn": 300000.0,
+          "fixed_cost_ngn": 150000.0,
+          "stress_pct": 10.0,
+          "compliance": "unresolved",
+          "channel": "Direct sales",
+          "shipping": "Air"
+        },
+        "input_truth_state": "User input"
+      }
     }
   ],
   "status": "superseded by unit-economics/1.1.0; retained for replay only"

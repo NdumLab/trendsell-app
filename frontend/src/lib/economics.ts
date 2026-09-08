@@ -11,10 +11,10 @@ import { ceilUnits, div, money, mul, parse } from '@/lib/money';
  *  `unit-economics/1.1.0` is the current version: identical formulas, evaluated with the
  *  shared scaled-integer arithmetic in `money.ts` so the browser and the API agree exactly. */
 export const FORMULA_VERSION = 'unit-economics/1.1.0';
-export const THRESHOLD_VERSION = 'decision-gates/1.0.0';
+export const THRESHOLD_VERSION = 'decision-gates/1.1.0';
 
-export interface EvidenceGate { confidence: number; coverage: boolean; compliance_resolved: boolean; overall: number | null; observation_ids: string[] }
-export const NO_EVIDENCE: EvidenceGate = { confidence: 0, coverage: false, compliance_resolved: false, overall: null, observation_ids: [] };
+export interface EvidenceGate { confidence: number; coverage: boolean; compliance_resolved: boolean; overall: number | null; observation_ids: string[]; compliance_status?: string }
+export const NO_EVIDENCE: EvidenceGate = { confidence: 0, coverage: false, compliance_resolved: false, overall: null, observation_ids: [], compliance_status: 'none' };
 
 type ScenarioRow = Assessment['scenarios'][number];
 
@@ -65,31 +65,70 @@ const SCENARIO_FORMULAS: Record<string, (i: Inputs) => ScenarioRow[]> = {
   'unit-economics/1.1.0': scenariosV1_1_0,
 };
 
-/** The decision gates. Unchanged by T04 and versioned separately as THRESHOLD_VERSION. */
-export function gates(scenarios: ScenarioRow[], i: Inputs, evidence: EvidenceGate): { decision: Assessment['decision']; blockers: string[] } {
+/** What a reviewer's rejection says, in the assessment as well as on the screen. */
+export const REJECTED_BLOCKER = 'A reviewer rejected this product for import. Do not proceed.';
+export const PROHIBITED_BLOCKER = 'The product is marked prohibited. Do not proceed.';
+
+/** The advisory blockers. Identical in both threshold versions. */
+function blockersFor(scenarios: ScenarioRow[], evidence: EvidenceGate): string[] {
   const base = scenarios[1], downside = scenarios[0], blockers: string[] = [];
   if (!evidence.coverage) blockers.push('Collect independent demand signals and destination-market evidence.');
   if (!evidence.compliance_resolved) blockers.push('Obtain a reviewed product classification and current import requirements.');
   if (evidence.confidence<70) blockers.push('Raise evidence confidence to at least 70 before committing inventory.');
   if (base.margin_pct<25) blockers.push('Raise base contribution margin to at least 25%.');
   if (downside.margin_pct<10) blockers.push('Keep downside contribution margin at or above 10%.');
-  let decision: Assessment['decision'];
-  if(i.compliance==='prohibited') { decision='NO-GO'; blockers.unshift('The product is marked prohibited. Do not proceed.'); }
-  else if(evidence.confidence<40 || !evidence.coverage) decision='INSUFFICIENT EVIDENCE';
-  else if(base.margin_pct<15 || (evidence.overall!==null && evidence.overall<55)) decision='NO-GO';
-  else if(!blockers.length && (evidence.overall||0)>=75) decision='GO';
-  else decision='WATCH';
-  return { decision, blockers };
+  return blockers;
+}
+
+/** The evidence/economics ladder, once nothing has forced NO-GO. */
+function decide(scenarios: ScenarioRow[], evidence: EvidenceGate, blockers: string[]): Assessment['decision'] {
+  const base = scenarios[1];
+  if (evidence.confidence<40 || !evidence.coverage) return 'INSUFFICIENT EVIDENCE';
+  if (base.margin_pct<15 || (evidence.overall!==null && evidence.overall<55)) return 'NO-GO';
+  if (!blockers.length && (evidence.overall||0)>=75) return 'GO';
+  return 'WATCH';
+}
+
+type GateRule = (scenarios: ScenarioRow[], i: Inputs, evidence: EvidenceGate) => { decision: Assessment['decision']; blockers: string[] };
+
+/** The gates the pilot shipped: only the user's own dropdown can force NO-GO. Frozen, so
+ *  an assessment saved under it replays to the values it was saved with. */
+const gatesV1_0_0: GateRule = (scenarios, i, evidence) => {
+  const blockers = blockersFor(scenarios, evidence);
+  if (i.compliance==='prohibited') return { decision:'NO-GO', blockers:[PROHIBITED_BLOCKER, ...blockers] };
+  return { decision: decide(scenarios, evidence, blockers), blockers };
+};
+
+/** The current gates: a reviewer's rejection is authoritative (review finding R04). A
+ *  missing `compliance_status` means no reviewer has rejected this, which reproduces
+ *  1.0.0 exactly. */
+const gatesV1_1_0: GateRule = (scenarios, i, evidence) => {
+  const blockers = blockersFor(scenarios, evidence);
+  if (evidence.compliance_status==='rejected') return { decision:'NO-GO', blockers:[REJECTED_BLOCKER, ...blockers] };
+  if (i.compliance==='prohibited') return { decision:'NO-GO', blockers:[PROHIBITED_BLOCKER, ...blockers] };
+  return { decision: decide(scenarios, evidence, blockers), blockers };
+};
+
+const GATE_RULES: Record<string, GateRule> = {
+  'decision-gates/1.0.0': gatesV1_0_0,
+  'decision-gates/1.1.0': gatesV1_1_0,
+};
+
+/** The decision gates for `thresholdVersion`. */
+export function gates(scenarios: ScenarioRow[], i: Inputs, evidence: EvidenceGate, thresholdVersion: string = THRESHOLD_VERSION): { decision: Assessment['decision']; blockers: string[] } {
+  const rule = GATE_RULES[thresholdVersion];
+  if (!rule) throw new Error(`unknown threshold version: ${thresholdVersion}`);
+  return rule(scenarios, i, evidence);
 }
 
 /** Scenarios and gates for `i`.
  *  `formulaVersion` exists so a stored assessment replays under the version it was saved
  *  with. Callers producing a *new* assessment must leave it at the default. */
-export function calculate(i: Inputs, evidence: EvidenceGate = NO_EVIDENCE, formulaVersion: string = FORMULA_VERSION): Assessment {
+export function calculate(i: Inputs, evidence: EvidenceGate = NO_EVIDENCE, formulaVersion: string = FORMULA_VERSION, thresholdVersion: string = THRESHOLD_VERSION): Assessment {
   const build = SCENARIO_FORMULAS[formulaVersion];
   if (!build) throw new Error(`unknown formula version: ${formulaVersion}`);
   const scenarios = build(i);
-  const { decision, blockers } = gates(scenarios, i, evidence);
+  const { decision, blockers } = gates(scenarios, i, { ...NO_EVIDENCE, ...evidence }, thresholdVersion);
   return {formula_version:formulaVersion,truth_state:'Calculated',currency:'NGN',market:'NG',decision,confidence:evidence.confidence,observation_ids:evidence.observation_ids,blockers,scenarios,inputs:i,input_truth_state:'User input'};
 }
 

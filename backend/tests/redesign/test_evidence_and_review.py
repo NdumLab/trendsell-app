@@ -393,3 +393,155 @@ def test_recording_evidence_and_reviewing_are_both_audited(client, confirmed, re
     assert 'compliance.review_requested' in actions
     assert actions['compliance.reviewed']['detail']['status'] == 'approved'
     assert actions['compliance.reviewed']['detail']['sources'] == 1
+
+
+# --- R03: an approval must rest on support that actually applies ---------------------
+#
+# Review finding R03: effective dates were regex-checked, stored, shown — and never
+# consulted. An approval citing a rule that stopped applying in 2011, naming no
+# classification and listing no requirements, cleared the gate in September 2026.
+
+EXPIRED_SOURCE = {'title': 'Withdrawn tariff schedule', 'url': 'https://example-regulator.test/withdrawn',
+                  'publisher': 'Example regulator', 'effective_from': '2010-01-01',
+                  'effective_to': '2011-01-01'}
+
+
+def approve(client, review_id, **overrides):
+    return client.post(f'/api/v1/compliance/reviews/{review_id}/decision',
+                       json={**APPROVAL, **overrides}, headers=HEADERS)
+
+
+@pytest.fixture
+def requested(client, confirmed):
+    """A review waiting for a decision."""
+    response = client.post(f'/api/v1/products/{confirmed}/compliance/requests',
+                           json={**REVIEW_REQUEST, 'product_id': confirmed}, headers=HEADERS)
+    assert response.status_code == 201, response.text
+    return response.json()['id']
+
+
+def test_an_approval_on_expired_support_cannot_clear_the_gate(client, confirmed, requested, reviewer):
+    """The review's exact reproduction: 2010-2011 support, no code, no requirements."""
+    response = approve(client, requested, sources=[EXPIRED_SOURCE], hs_code='', requirements=[])
+    assert response.status_code == 422, response.text
+
+    gate = client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']
+    assert gate['resolved'] is False
+
+
+def test_an_approval_citing_only_expired_sources_is_refused(client, confirmed, requested, reviewer):
+    response = approve(client, requested, sources=[EXPIRED_SOURCE])
+    assert response.status_code == 422
+    assert 'expired or not yet in force' in response.json()['detail']
+
+
+def test_an_approval_citing_a_future_source_is_refused(client, confirmed, requested, reviewer):
+    future = {**EXPIRED_SOURCE, 'effective_from': '2099-01-01', 'effective_to': None}
+    response = approve(client, requested, sources=[future])
+    assert response.status_code == 422
+    assert 'expired or not yet in force' in response.json()['detail']
+
+
+def test_an_approval_must_name_the_classification_it_reviewed(client, requested, reviewer):
+    assert approve(client, requested, hs_code='').status_code == 422
+
+
+def test_an_approval_with_no_requirements_must_say_so_deliberately(client, requested, reviewer):
+    """An empty list is silence; a reviewer has to state that none apply."""
+    assert approve(client, requested, requirements=[]).status_code == 422
+    assert approve(client, requested, requirements=[], no_additional_requirements=True).status_code == 200
+
+
+def test_a_source_period_must_be_real_and_ordered(client, requested, reviewer):
+    impossible = {**EXPIRED_SOURCE, 'effective_from': '2026-13-45', 'effective_to': None}
+    assert approve(client, requested, sources=[impossible]).status_code == 422
+    backwards = {**EXPIRED_SOURCE, 'effective_from': '2026-06-01', 'effective_to': '2026-01-01'}
+    assert approve(client, requested, sources=[backwards]).status_code == 422
+
+
+def test_an_approval_never_outlives_the_support_it_cites(client, confirmed, requested, reviewer):
+    """A source lapsing in 30 days ends the approval then, not in 180 days."""
+    ends = (datetime.now(timezone.utc) + timedelta(days=30)).strftime('%Y-%m-%d')
+    body = approve(client, requested, validity_days=DEFAULT_VALIDITY_DAYS,
+                   sources=[{**APPROVAL['sources'][0], 'effective_to': ends}]).json()
+    assert body['expires_at'][:10] == ends
+
+    gate = client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']
+    assert gate['resolved'] is True, 'it is still in force today'
+
+
+def test_a_stored_approval_stops_resolving_once_its_support_lapses(client, confirmed, requested, reviewer):
+    """Applied on read too, so an approval stored before this rule cannot outlive it."""
+    approve(client, requested)
+    assert client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']['resolved'] is True
+
+    with client.app.state.database.session() as db:
+        row = db.query(Record).filter_by(kind='compliance_review', id=requested).one()
+        payload = dict(row.payload)
+        payload['sources'] = [EXPIRED_SOURCE]
+        row.payload = payload
+        db.commit()
+
+    gate = client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']
+    assert gate['resolved'] is False
+    assert gate['status'] == 'support_expired'
+
+
+# --- R04: a reviewer's rejection decides the assessment ------------------------------
+#
+# Review finding R04: the gate said "a reviewer rejected this product for import; do not
+# proceed" while the saved assessment beside it read WATCH at confidence 60, because the
+# rejection reached the screen and never reached the calculation.
+
+def test_a_rejected_review_forces_no_go_without_the_user_restating_it(client, confirmed, requested, reviewer):
+    rich_evidence(client, confirmed)
+    rejected = client.post(f'/api/v1/compliance/reviews/{requested}/decision',
+                           json={'status': 'rejected',
+                                 'rationale': 'Prohibited for import into the destination market.'},
+                           headers=HEADERS)
+    assert rejected.status_code == 200, rejected.text
+
+    # The default dropdown value: the user is not asked to repeat the reviewer.
+    saved = client.post('/api/v1/decisions', json={'product_id': confirmed, 'inputs': INPUTS},
+                        headers={**HEADERS, 'Idempotency-Key': 'r04'})
+    assert saved.status_code == 201, saved.text
+    body = saved.json()
+    assert body['inputs']['compliance'] == 'unresolved'
+    assert body['decision'] == 'NO-GO'
+    assert body['blockers'][0] == 'A reviewer rejected this product for import. Do not proceed.'
+    assert body['compliance']['status'] == 'rejected'
+    assert body['compliance_review_id'] == requested
+
+
+def test_the_saved_assessment_and_its_gate_never_disagree(client, confirmed, requested, reviewer):
+    """The disagreement the review reproduced: gate says stop, decision says WATCH."""
+    rich_evidence(client, confirmed)
+    client.post(f'/api/v1/compliance/reviews/{requested}/decision',
+                json={'status': 'rejected', 'rationale': 'Not permitted for import as specified.'},
+                headers=HEADERS)
+    body = client.post('/api/v1/decisions', json={'product_id': confirmed, 'inputs': INPUTS},
+                       headers={**HEADERS, 'Idempotency-Key': 'r04b'}).json()
+    assert not (body['compliance']['status'] == 'rejected' and body['decision'] == 'WATCH')
+
+
+def test_more_information_is_not_a_rejection(client, confirmed, requested, reviewer):
+    rich_evidence(client, confirmed)
+    client.post(f'/api/v1/compliance/reviews/{requested}/decision',
+                json={'status': 'more_information', 'rationale': 'Send the full specification sheet.'},
+                headers=HEADERS)
+    body = client.post('/api/v1/decisions', json={'product_id': confirmed, 'inputs': INPUTS},
+                       headers={**HEADERS, 'Idempotency-Key': 'r04c'}).json()
+    assert body['decision'] != 'NO-GO'
+    assert body['compliance']['status'] == 'more_information'
+
+
+def test_a_saved_assessment_records_the_thresholds_that_decided_it(client, confirmed, requested, reviewer):
+    """So a rejection recorded under these gates replays under these gates (R06)."""
+    rich_evidence(client, confirmed)
+    client.post(f'/api/v1/compliance/reviews/{requested}/decision',
+                json={'status': 'rejected', 'rationale': 'Not permitted for import as specified.'},
+                headers=HEADERS)
+    body = client.post('/api/v1/decisions', json={'product_id': confirmed, 'inputs': INPUTS},
+                       headers={**HEADERS, 'Idempotency-Key': 'r04d'}).json()
+    assert body['threshold_version'] == 'decision-gates/1.1.0'
+    assert body['evidence_quality']['compliance_status'] == 'rejected'

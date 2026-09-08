@@ -41,6 +41,37 @@ export async function enterDemo(page: Page) {
   await expect(page.getByText('DEMO WORKSPACE', { exact: true })).toBeVisible();
 }
 
+/** Record one manual observation through the API, as the evidence screen does. */
+export async function recordEvidence(page: Page, productId: string, metric: string, market: 'US'|'NG', source: string) {
+  const response = await page.request.post(`/api/v1/products/${productId}/evidence`, {
+    headers: { 'X-Requested-With': 'TrendSell' },
+    data: { metric, value: 68, unit: 'index / 100', market,
+            observed_at: new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10),
+            source_name: source, method: 'Disposable manually entered test fixture.' },
+  });
+  expect(response.status(), await response.text()).toBe(201);
+}
+
+/** Enough independent, current evidence for the method to score a product. */
+export async function recordFullCoverage(page: Page, productId: string) {
+  await recordEvidence(page, productId, 'Search interest', 'US', 'Search trends export');
+  await recordEvidence(page, productId, 'Review velocity', 'US', 'Marketplace listing page');
+  await recordEvidence(page, productId, 'Marketplace rank', 'US', 'Marketplace category page');
+  await recordEvidence(page, productId, 'Local listing price', 'NG', 'Lagos market survey');
+}
+
+/** Capture and confirm a product through the API, returning its id. */
+export async function apiProduct(page: Page, identifier: string, name: string) {
+  const headers = { 'X-Requested-With': 'TrendSell' };
+  const job = await page.request.post('/api/v1/xray', { headers, data: { input: identifier } });
+  expect(job.status(), await job.text()).toBe(202);
+  const productId = (await job.json()).product_id as string;
+  const confirmed = await page.request.post(`/api/v1/products/${productId}/confirm`,
+                                            { headers, data: { name } });
+  expect(confirmed.status(), await confirmed.text()).toBe(200);
+  return productId;
+}
+
 /** Capture a product and confirm its identity, which a saved decision requires. */
 export async function captureAndConfirm(page: Page, identifier: string, name: string) {
   await page.goto('/xray');

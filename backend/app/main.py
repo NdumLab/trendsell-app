@@ -4,11 +4,11 @@ import hashlib
 import json
 import secrets
 import time
-from typing import Literal
+from typing import Annotated, Literal
 from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response, BackgroundTasks, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, ConfigDict, HttpUrl, TypeAdapter, field_validator
+from pydantic import BaseModel, Field, ConfigDict, HttpUrl, StringConstraints, TypeAdapter, field_validator
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from . import migrate
@@ -31,8 +31,17 @@ SOURCES = [
     {'id':'freight', 'name':'Freight & currency', 'category':'Landed cost', 'markets':['CN','NG'], 'reason':'Enter dated freight quotes and your exchange-rate assumption in Decision Room.', 'rights':'User-provided inputs only'},
 ]
 
+#: Every record kind a workspace owns, and the collection it is exported under.
+#:
+#: Review finding R05: `evidence` and `compliance_review` were added as record kinds but
+#: never added here, so "export workspace records" silently omitted them — and because
+#: the counts are derived from this same list, the export could not report what it had
+#: left out. A new kind belongs in this list at the moment it becomes a kind; the export
+#: contract test asserts exactly that, so a future kind cannot go missing quietly.
 EXPORT_KINDS = [('product','products'), ('job','research_jobs'), ('decision','decisions'),
-                ('quote','quotes'), ('watch','watches')]
+                ('quote','quotes'), ('watch','watches'), ('evidence','evidence'),
+                ('compliance_review','compliance_reviews')]
+EXPORT_SCHEMA = 'trendsell-workspace-export/2'
 
 HTTPS_URL = TypeAdapter(HttpUrl)
 
@@ -42,8 +51,19 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False, str_strip_whitespace=True)
 
 class Credentials(StrictModel):
+    """Sign-in and registration credentials.
+
+    Review finding R02: `StrictModel` sets `str_strip_whitespace=True`, which is right for
+    an email or a display name and wrong for a password. The pilot hashed the password
+    exactly as it was typed, so stripping it here made every existing account whose
+    password began or ended with a space unable to sign in — the legacy verifier was
+    correct, but it was being handed a different string than the one that was hashed.
+
+    A password is an opaque secret: it is stored, compared and length-checked exactly as
+    entered. Email and name keep their own normalisation, at their own fields.
+    """
     email: str = Field(min_length=5, max_length=254, pattern=r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
-    password: str = Field(min_length=12, max_length=128)
+    password: Annotated[str, StringConstraints(strip_whitespace=False, min_length=12, max_length=128)]
     name: str = Field(default='My workspace', min_length=1, max_length=80)
 
 class XrayRequest(StrictModel):
@@ -121,6 +141,19 @@ def create_app(settings=None):
     counters = Counters()
     app.state.counters = counters
 
+    def identity(request):
+        """Who the request turned out to be, for the log line.
+
+        Review finding R11: `current_user` is a synchronous dependency, so FastAPI runs it
+        in a worker thread with its own context. Context variables set there are invisible
+        to this middleware, which runs in the request's own context — so every
+        authenticated request logged `workspace_id: "-"`. Starlette backs `request.state`
+        with the ASGI scope, and the scope is the one object both sides genuinely share.
+        """
+        state = request.scope.get('state') or {}
+        return {'workspace_id': state.get('workspace_id', '-'),
+                'user_id': state.get('user_id', '-')}
+
     @app.middleware('http')
     async def guard(request, call_next):
         # One id per request: returned to the caller, written on every log line, and
@@ -139,12 +172,15 @@ def create_app(settings=None):
             else:
                 response = await call_next(request)
             duration_ms = (time.perf_counter() - started) * 1000
-            counters.record(request.method, request.url.path, response.status_code, duration_ms)
+            # The router records which route it matched on the shared scope, so the label
+            # is a bounded template rather than whatever path the caller typed (R07).
+            matched = request.scope.get('route')
+            counters.record(request.method, request.url.path, response.status_code, duration_ms, matched)
             # No body, no query string, no cookie: a route label, an outcome and who it was.
             logger.info('request', extra={'request_id': identifier, 'context': {
-                'method': request.method, 'route': route_label(request.url.path),
+                'method': request.method, 'route': route_label(request.url.path, matched),
                 'status': response.status_code, 'duration_ms': round(duration_ms, 1),
-                'workspace_id': WORKSPACE_ID.get(), 'user_id': USER_ID.get()}})
+                **identity(request)}})
             response.headers['X-Request-ID'] = identifier
             response.headers['X-Content-Type-Options'] = 'nosniff'
             response.headers['X-Frame-Options'] = 'DENY'
@@ -155,10 +191,11 @@ def create_app(settings=None):
             return response
         except Exception:
             duration_ms = (time.perf_counter() - started) * 1000
-            counters.record(request.method, request.url.path, 500, duration_ms)
+            matched = request.scope.get('route')
+            counters.record(request.method, request.url.path, 500, duration_ms, matched)
             logger.exception('request failed', extra={'request_id': identifier, 'context': {
-                'method': request.method, 'route': route_label(request.url.path),
-                'duration_ms': round(duration_ms, 1), 'workspace_id': WORKSPACE_ID.get()}})
+                'method': request.method, 'route': route_label(request.url.path, matched),
+                'duration_ms': round(duration_ms, 1), **identity(request)}})
             raise
         finally:
             REQUEST_ID.reset(request_token)
@@ -176,8 +213,12 @@ def create_app(settings=None):
             raise HTTPException(401, 'Sign in to your workspace to continue.')
         user = db.get(User, session.user_id)
         if not user: raise HTTPException(401, 'Session is no longer valid.')
+        # Both: the context variables serve `audit()` on this same thread, and the request
+        # scope carries the identity back out to the logging middleware (R11).
         WORKSPACE_ID.set(user.workspace_id)
         USER_ID.set(user.id)
+        request.state.workspace_id = user.workspace_id
+        request.state.user_id = user.id
         return user
 
     def permissions_granted(user, permission):
@@ -423,6 +464,10 @@ def create_app(settings=None):
         review = latest_review(db, user, product_id)
         gate = cmp.gate_state(review)
         reading = quality(evidence_records(db, user, product_id), gate['resolved'])
+        # The reviewed state itself, not merely whether it resolved the gate. A rejection
+        # is authoritative and decides the assessment; under the previous thresholds it
+        # reached the screen and never reached the calculation (review finding R04).
+        reading['compliance_status'] = gate['status']
         return reading, gate, review
 
     @app.get('/api/v1/products/{product_id}/evidence')
@@ -518,13 +563,19 @@ def create_app(settings=None):
         row = owned(db,user,'compliance_review',review_id)
         if row.payload['status'] != 'requested':
             raise HTTPException(409, 'This review has already been decided. Request a new review instead.')
-        if payload.status == 'approved' and not payload.sources:
-            raise HTTPException(422, 'An approval must cite the official sources it rests on.')
+        sources = [source.model_dump() for source in payload.sources]
+        if payload.status == 'approved':
+            # The dates are not decoration: an approval has to rest on a publication that
+            # applies today, and it lapses when that publication does (R03).
+            supported, reason = cmp.approval_support(sources)
+            if not supported:
+                raise HTTPException(422, reason)
         decided = {**row.payload, 'status': payload.status, 'rationale': payload.rationale,
                    'hs_code': payload.hs_code, 'requirements': payload.requirements,
-                   'sources': [source.model_dump() for source in payload.sources],
-                   'reviewer_id': user.id, 'decided_at': now(),
-                   'expires_at': cmp.expiry(payload.validity_days) if payload.status == 'approved' else None}
+                   'no_additional_requirements': payload.no_additional_requirements,
+                   'sources': sources, 'reviewer_id': user.id, 'decided_at': now(),
+                   'expires_at': cmp.approval_expiry(payload.validity_days, sources)
+                                 if payload.status == 'approved' else None}
         row.payload = decided
         audit(db,user,'compliance.reviewed',row.id,product_id=row.payload['product_id'],
               status=payload.status,hs_code=payload.hs_code or None,sources=len(payload.sources))
@@ -715,7 +766,7 @@ def create_app(settings=None):
             with database.session() as export_db:
                 counts = {name: records(export_db,user,kind).count() for kind, name in EXPORT_KINDS}
                 header = {'workspace_id':user.workspace_id, 'workspace':user.name, 'exported_at':now(),
-                          'exported_by':user.id, 'demo':False, 'schema':'trendsell-workspace-export/1',
+                          'exported_by':user.id, 'demo':False, 'schema':EXPORT_SCHEMA,
                           'counts':counts}
                 yield json.dumps(header)[:-1]
                 for kind, name in EXPORT_KINDS:
@@ -729,7 +780,7 @@ def create_app(settings=None):
         with database.session() as audit_db:
             # A download is an event worth keeping: who took the whole workspace, and when.
             audit(audit_db, user, 'workspace.exported', scope='all-records',
-                  schema='trendsell-workspace-export/1')
+                  schema=EXPORT_SCHEMA)
             audit_db.commit()
         filename = f'trendsell-workspace-{now()[:10]}.json'
         return StreamingResponse(document(), media_type='application/json',
@@ -762,8 +813,22 @@ def create_app(settings=None):
         return {**table, 'role': user.role, 'granted': table['roles'].get(user.role, [])}
 
     @app.get('/api/v1/ops/metrics')
-    def metrics(user=Depends(permitted('workspace.admin'))):
-        """Operational counters for this worker. No workspace data (action plan P07)."""
+    def metrics(x_metrics_token: str | None = Header(default=None)):
+        """Operational counters for this worker: an operator surface, not a workspace one.
+
+        Review finding R07: this was granted by `workspace.admin`, so any workspace owner
+        read counters covering every workspace the worker had served — request labels and
+        aggregate activity that are not theirs. Administering a workspace is not operating
+        the service, and no workspace permission can express "operates the fleet".
+
+        So it is gated on a token configured with the deployment, alongside the process
+        rather than inside the product. Unset means the surface does not exist, which is
+        the default and the right answer for anyone who has not deliberately enabled it.
+        """
+        if not settings.metrics_token:
+            raise HTTPException(404, 'Operational metrics are not enabled on this deployment.')
+        if not x_metrics_token or not secrets.compare_digest(x_metrics_token, settings.metrics_token):
+            raise HTTPException(403, 'Operational metrics require the operator token.')
         return {**counters.snapshot(), 'environment': settings.environment,
                 'schema_revision': migrate.head_revision(settings.database_url)}
 

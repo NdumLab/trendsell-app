@@ -31,6 +31,9 @@ HEADERS = {'X-Requested-With': 'TrendSell'}
 #: runs at a deliberately weak cost; test_passwords.py exercises the real ones (P02).
 FAST_SCRYPT = {'n': 2 ** 12, 'r': 8, 'p': 1}
 PASSWORD = 'a-long-enough-password'
+#: The operator token for the metrics surface. Not a workspace credential (R07).
+METRICS_TOKEN = 'operator-token-for-tests'
+OPERATOR = {'X-Metrics-Token': METRICS_TOKEN}
 POSTGRES_URL = os.getenv('TEST_POSTGRES_URL')
 requires_postgres = pytest.mark.skipif(not POSTGRES_URL, reason='TEST_POSTGRES_URL is not configured')
 
@@ -72,7 +75,8 @@ def database_url(tmp_path):
 @pytest.fixture
 def settings(database_url):
     return Settings(environment='test', database_url=database_url,
-                    origins=('http://localhost:3000',), allow_registration=True, research_daily_limit=20)
+                    origins=('http://localhost:3000',), allow_registration=True, research_daily_limit=20,
+                    metrics_token=METRICS_TOKEN)
 
 
 @pytest.fixture
