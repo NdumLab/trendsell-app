@@ -10,6 +10,11 @@ list of "winning products". Where evidence does not exist, TrendSell says so ins
 This repository was rebuilt from a synthetic-data prototype. The prototype is preserved, unbuilt and
 unimported, under [`prototype/`](prototype/README.md); its numbers were seeded, not observed.
 
+The current implementation roadmap is the [detailed action plan](docs/ACTION_PLAN.md), combining
+the [September 2026 application review](docs/APP_REVIEW_2026-09-08.md) and product-capability review.
+It defines work items, dependencies, acceptance checks, and release gates; planned features are not
+claims about what this release already supports.
+
 ---
 
 ## The evidence rule
@@ -46,7 +51,8 @@ Consequences that are enforced, not aspirational:
 | Market Gaps | Corridor view that reports insufficient evidence rather than an untapped opportunity |
 
 Image, video and keyword capture, live collectors, alerts and Creative DNA are later phases.
-See `TrendSell_Complete_Redesign_Plan-1.docx` for the full plan.
+Follow [docs/ACTION_PLAN.md](docs/ACTION_PLAN.md) for implementation order.
+`TrendSell_Complete_Redesign_Plan-1.docx` remains the broader product-vision reference.
 
 ## Architecture
 
