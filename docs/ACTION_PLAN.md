@@ -1,6 +1,6 @@
 **TrendSell — detailed plan of action**
 
-Created: 8 September 2026. Status: **planned; implementation has not started under this plan**.
+Created: 8 September 2026. Status: **in progress**. Phase 0 is complete; Phase 1 is complete except account recovery (blocked on an email provider) and the production half of backup/restore. Selected Phase 2/3 items — manual evidence, the evidence-quality method, the compliance-review workflow and server-computed gates — are implemented. See the implementation status table below.
 
 This is the current execution roadmap. It combines the [repository and deployment review](APP_REVIEW_2026-09-08.md), the additional analyst review supplied by the product owner, and the subsequent reconciliation. It supersedes the implementation order in [FEATURES_ROADMAP.md](../FEATURES_ROADMAP.md) and the historical [prototype PRD](../memory/PRD.md). The [complete redesign document](../TrendSell_Complete_Redesign_Plan-1.docx) remains a vision reference; this plan determines the next work.
 
@@ -54,6 +54,22 @@ acceptance checks were run and passed; anything unverified stays `Planned` or `B
 | T07 assessment vs evidence | Done | `latest_assessment` on products/watches, `economics_summary()`; `tests/redesign/test_assessment_visibility.py`, `e2e/assessment-visibility.spec.ts` |
 | T08 input normalisation and copy | Done | `str_strip_whitespace`, real HTTPS URL validation, monitoring copy corrected; `tests/redesign/test_input_normalisation.py` |
 | T09 dependencies | Done | pytest 9.0.3; runtime/dev requirements split and locked; `pip-audit --strict` clean on both locks; runtime install verified free of test packages |
+| P01 migrations and deployment config | Done | `backend/migrations/` 0001→0003, `python -m app.migrate {check,upgrade,stamp}`, schema-aware `/api/ready`, `deploy/` templates with placeholders only, `docs/RUNBOOK.md` |
+| P02 password hashing | Done | `backend/app/passwords.py`; self-describing scrypt at an OWASP-listed set; legacy hashes verify and are rehashed on a correct sign-in |
+| P03 account recovery | **Blocked** | Needs an email provider decision. Nothing implemented; `docs/PRIVACY_AND_PERMISSIONS.md` states plainly that recovery and deletion do not exist |
+| P04 caches, limits, cleanup | Done | ASGI `BodyLimit` counting streamed bytes; separate sign-in/registration limits per address and per account; `purge_expired()`; central 401 handling and cache clearing in the browser |
+| P05 permissions and audit | Done | `backend/app/permissions.py` matrix with a reviewer role; audit carries actor, workspace, request id and target detail; `docs/PRIVACY_AND_PERMISSIONS.md` |
+| P06 backup and restore | Partial | Scripts and `verify_restore.py` present; drill run against a disposable PostgreSQL instance. **Not done:** production drill, scheduling, retention decision, agreed recovery objectives |
+| P07 logs, request ids, metrics | Done | JSON logs with no bodies or secrets, `X-Request-ID` through to audit rows, `/api/v1/ops/metrics`, runbook diagnosis section. **Not done:** forwarding alerts to an on-call destination |
+| E01 source feasibility matrix | Blocked | No provider access has been sought or granted in this pass; nothing is connected and nothing claims to be |
+| E02–E05 collectors and snapshots | Planned | Depend on E01. No collector is connected; manual capture (E06) is the current path |
+| E06 manual evidence capture | Done (files deferred) | Dated records with metric, market, source, method and author; truth state fixed server-side to `User input`. File attachments deliberately deferred until upload/scanning/retention is designed |
+| E07 evidence-quality method | Done | `evidence-quality/1.0.0` with per-component explanations, a 90-day window, and a cap of 60 on self-reported evidence; `contracts/evidence_cases.json` holds both implementations together |
+| N02 classification model | Done | Candidate codes stay candidates; every rule carries publisher, link and effective date |
+| N03 compliance-review workflow | Done | Request → decide → supersede, behind `compliance.review`; expiry enforced; an analyst cannot decide their own request |
+| D03 gates from real records | Done | The decision endpoint computes coverage, confidence and compliance from stored records; the client cannot set them |
+| U02 coherent demo | Done | The demo GO passes the production method and gates on labelled synthetic evidence and a synthetic reviewer approval; distinct per-product trajectories |
+| N01, D01, D02, D04, U01, U03–U05, M01–M06, C01–C04 | Planned | Not started in this pass |
 
 **Operating rules that every phase must preserve**
 
@@ -281,8 +297,8 @@ When implementation begins, append dated milestone evidence here or link to issu
 | Milestone | Status | Evidence |
 | --- | --- | --- |
 | Plan saved and linked | Done — 2026-09-08 | This document, README link, and supersession notices |
-| Gate A: trustworthy manual workflow | Planned | — |
-| Gate B: recoverable platform | Planned | — |
+| Gate A: trustworthy manual workflow | Done — 2026-09-08 | T01–T09 pass their acceptance checks. 378 backend tests on SQLite and PostgreSQL 16.4, 132 frontend tests, 25 browser tests, production build, dependency and secret scans. Each reviewed defect has a regression that fails against the pre-fix code. |
+| Gate B: recoverable platform | Partial — 2026-09-08 | Clean deployment and adoption of an existing schema both verified; a restore drill was demonstrated against a disposable PostgreSQL instance; permissions and authentication work against one PostgreSQL database; scans current; privacy and retention documented. **Outstanding:** account recovery (P03, blocked), a production restore drill, scheduled backups, and agreed recovery objectives. |
 | Gate C: genuine evidence | Planned | — |
 | Gate D: complete real investigation | Planned | — |
 | Gate E: controlled pilot | Planned | — |

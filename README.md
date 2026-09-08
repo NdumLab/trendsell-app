@@ -40,19 +40,29 @@ Consequences that are enforced, not aspirational:
 - A refresh with no new observation produces no score change.
 - A failed collector lowers confidence; it never reads as falling demand.
 - Missing chart points stay as gaps and are never interpolated.
-- `GO` requires resolved compliance and confidence ≥ 70, regardless of how good the margin looks.
+- `GO` requires compliance resolved **by a reviewer** and confidence ≥ 70, regardless of how good the margin looks.
+- Confidence is an evidence-coverage score, not a probability, and every component of it is shown.
+- Evidence you type is user input: it counts, but it is capped below the confidence a `GO` needs.
+  Only a connected, authorised collector could raise it further, and none is connected.
 
 ## What is in the pilot
 
 | Area | State |
 | --- | --- |
 | Product X-Ray | Amazon US URL or ASIN → identifier capture, research job, user confirmation |
-| Proof of demand | Timeline and evidence ledger, driven by observations; empty until a collector is connected |
-| Decision Room | Editable unit economics, three scenarios, cost waterfall, sensitivity, saved assessments |
-| Watchtower | Watches and materiality thresholds; scheduled collection and delivery are **not** enabled |
+| Evidence ledger | Record dated evidence yourself — metric, market, source, method, author. Stored as **User input**, never as an observation. No collector is connected |
+| Evidence coverage | A versioned, explainable score (`evidence-quality/1.0.0`) with a component-by-component breakdown. Self-reported evidence is capped below the confidence a GO needs |
+| Import readiness | Request a review, and a workspace reviewer approves, rejects or asks for more. An approval cites its official sources and expires. A dropdown cannot clear this gate |
+| Decision Room | Editable unit economics, three scenarios, cost waterfall, sensitivity, saved assessments. Coverage, confidence and compliance come from the server, not the browser |
+| Watchlist | Saved watches and materiality thresholds. Scheduled collection and delivery are **not** enabled, and the screen says so |
 | Suppliers | User-recorded quotes and RFQ drafts; nothing is sent on your behalf |
 | Data Health | Every source, its status, rights, freshness target and reason for being unavailable |
 | Market Gaps | Corridor view that reports insufficient evidence rather than an untapped opportunity |
+
+Not implemented, and not implied anywhere in the interface: live collectors, scheduled
+monitoring, alerts or email of any kind, account recovery, workspace deletion, team invitations,
+billing, and image, video or keyword capture. See
+[permissions, privacy and retention](docs/PRIVACY_AND_PERMISSIONS.md).
 
 Image, video and keyword capture, live collectors, alerts and Creative DNA are later phases.
 Follow [docs/ACTION_PLAN.md](docs/ACTION_PLAN.md) for implementation order.
