@@ -1,0 +1,84 @@
+# nginx site template for TrendSell (action plan P01).
+# Substitute ${TRENDSELL_DOMAIN} and install as /etc/nginx/sites-available/<domain>.
+# This file carries no secrets: certificates, the database URL and every credential
+# live outside the repository (see docs/RUNBOOK.md).
+# client_max_body_size here must stay at or below the API's own byte limit.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${TRENDSELL_DOMAIN};
+    server_tokens off;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://${TRENDSELL_DOMAIN}$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${TRENDSELL_DOMAIN};
+    server_tokens off;
+
+    root /var/www/${TRENDSELL_DOMAIN};
+    index index.html;
+
+    access_log /var/log/nginx/${TRENDSELL_DOMAIN}.access.log;
+    error_log /var/log/nginx/${TRENDSELL_DOMAIN}.error.log;
+
+    ssl_certificate /etc/letsencrypt/live/${TRENDSELL_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${TRENDSELL_DOMAIN}/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+    # The bundled stylesheet @imports DM Sans from Google Fonts; those two hosts are the
+    # only third parties the page may reach. Self-hosting the font would remove them.
+    add_header Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self'; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" always;
+
+    # API. The app sets its session cookie on path /api, so the prefix is preserved.
+    location /api/ {
+        client_max_body_size 64k;
+        proxy_pass http://127.0.0.1:8021;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        proxy_redirect off;
+    }
+
+    location = /index.html {
+        expires -1;
+        try_files $uri =404;
+    }
+
+    # Hashed build assets are immutable.
+    location ^~ /assets/ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    location / {
+        expires -1;
+        try_files $uri $uri/ /index.html;
+    }
+}

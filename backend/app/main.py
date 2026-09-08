@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict, HttpUrl, TypeAdapter, field_validator
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from . import migrate
 from .settings import Settings
 from .db import Database, Workspace, User, Session, Record, records, audit, now, uid
 from .security import hash_password, check_password, token_hash, consume, resolve_input
@@ -246,9 +247,29 @@ def create_app(settings=None):
         return user_view(user)
 
     @app.get('/api/health')
-    def health(db=Depends(get_db)):
-        db.execute(text('SELECT 1'))
+    def health():
+        """Liveness: the process is up. Deliberately does not touch the database."""
         return {'status':'ok', 'version':'2.0.0', 'demo':False}
+
+    @app.get('/api/ready')
+    def ready(response: Response, db=Depends(get_db)):
+        """Readiness: the database answers *and* carries the schema this code expects.
+
+        `SELECT 1` proves connectivity, not that a migration has run (action plan P01).
+        A database at the wrong revision is reported as not ready rather than serving
+        requests against a schema the code does not match.
+        """
+        db.execute(text('SELECT 1'))
+        expected = migrate.head_revision(settings.database_url)
+        try:
+            actual = migrate.current_revision(database.engine)
+        except Exception:
+            actual = None
+        ready_now = actual == expected
+        if not ready_now:
+            response.status_code = 503
+        return {'status':'ready' if ready_now else 'schema_mismatch', 'database':'ok',
+                'schema_revision':actual, 'expected_revision':expected}
 
     @app.get('/api/v1/config')
     def config():

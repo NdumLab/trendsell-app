@@ -1,0 +1,34 @@
+# systemd unit template for the TrendSell API (action plan P01).
+# Install as /etc/systemd/system/trendsell.service. Secrets are read from
+# /etc/trendsell/trendsell.env, which is deliberately not in this repository;
+# deploy/trendsell.env.template documents the variables it must define.
+
+[Unit]
+Description=TrendSell evidence API
+After=network.target docker.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=trendsell
+Group=trendsell
+WorkingDirectory=/opt/trendsell/backend
+EnvironmentFile=/etc/trendsell/trendsell.env
+UMask=0027
+
+ExecStart=/opt/trendsell/venv/bin/uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8021 --workers 2 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=5
+TimeoutStartSec=60
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trendsell
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/trendsell /etc/trendsell
+
+[Install]
+WantedBy=multi-user.target

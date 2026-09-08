@@ -38,6 +38,23 @@ Planning scope is one corridor and a small, deliberately selected pilot catalog.
 - Implement narrow, reviewable changes. Preserve working pilot behavior and historical assessments. Do not combine a broad rewrite with a correctness fix.
 - This document authorizes no spending, supplier outreach, advertising campaigns, data-source agreements, or deployment by itself. Those are separately configured execution activities; preparing code and a reviewable release should precede any final deployment decision.
 
+**Implementation status**
+
+Updated as work lands on `impl/evidence-platform-phase0`. An item is `Done` only when its
+acceptance checks were run and passed; anything unverified stays `Planned` or `Blocked`.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| T01 audit regressions | Done | `tests/redesign/test_tenant_isolation.py`; shared app/database with separate cookie jars; whole suite also runs on PostgreSQL via `TEST_POSTGRES_URL`; removing the workspace filter fails 6 tests |
+| T02 Playwright isolation | Done | `frontend/playwright.config.ts`, `frontend/e2e/`; disposable API + SQLite file per run; `test:e2e -- --list` reports browser tests only; CI job added |
+| T03 export state and lineage | Done | Draft and saved exports are separate actions; assessments store their own evidence and versions; `e2e/export-integrity.spec.ts` reproduces both review findings |
+| T04 monetary precision | Done | `backend/app/money.py` / `frontend/src/lib/money.ts`; formula versioned to `unit-economics/1.1.0` with 1.0.0 replay preserved; 4000-case cross-language fuzz agrees exactly |
+| T05 pagination and export | Done | `backend/app/pagination.py`; server-side search, keyset cursor, `/api/v1/export`, `/api/v1/summary`; 250-product regression |
+| T06 concurrency | Done | `insert_unique()` savepoint; `tests/redesign/test_concurrency.py` reproduces the reported 500 against the pre-fix code |
+| T07 assessment vs evidence | Done | `latest_assessment` on products/watches, `economics_summary()`; `tests/redesign/test_assessment_visibility.py`, `e2e/assessment-visibility.spec.ts` |
+| T08 input normalisation and copy | Done | `str_strip_whitespace`, real HTTPS URL validation, monitoring copy corrected; `tests/redesign/test_input_normalisation.py` |
+| T09 dependencies | Done | pytest 9.0.3; runtime/dev requirements split and locked; `pip-audit --strict` clean on both locks; runtime install verified free of test packages |
+
 **Operating rules that every phase must preserve**
 
 1. Every market value has its truth state, unit, market, source or input author, relevant time, and lineage. No synthetic production fallback.
