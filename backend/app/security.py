@@ -1,6 +1,4 @@
 import hashlib
-import hmac
-import secrets
 import re
 from urllib.parse import urlsplit
 from fastapi import HTTPException
@@ -8,13 +6,13 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from .db import RateBucket
 
-def hash_password(password, salt=None):
-    salt = salt or secrets.token_hex(16)
-    value = hashlib.scrypt(password.encode(), salt=salt.encode(), n=16384, r=8, p=1).hex()
-    return f'{salt}:{value}'
+# Password hashing moved to app/passwords.py, which carries its own algorithm and
+# parameters so they can be raised without locking anyone out (action plan P02).
+from .passwords import dummy_verify, hash_password, verify_password  # noqa: F401
 
 def check_password(password, stored):
-    return hmac.compare_digest(hash_password(password, stored.split(':')[0]), stored)
+    """Kept for callers that only need the boolean. Prefer verify_password()."""
+    return verify_password(password, stored)[0]
 
 def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()

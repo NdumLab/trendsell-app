@@ -22,10 +22,14 @@ from sqlalchemy import create_engine, text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from app import passwords  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.settings import Settings  # noqa: E402
 
 HEADERS = {'X-Requested-With': 'TrendSell'}
+#: Production parameters cost ~380 ms per hash, and most tests register a user. The suite
+#: runs at a deliberately weak cost; test_passwords.py exercises the real ones (P02).
+FAST_SCRYPT = {'n': 2 ** 12, 'r': 8, 'p': 1}
 PASSWORD = 'a-long-enough-password'
 POSTGRES_URL = os.getenv('TEST_POSTGRES_URL')
 requires_postgres = pytest.mark.skipif(not POSTGRES_URL, reason='TEST_POSTGRES_URL is not configured')
@@ -45,6 +49,11 @@ def postgres_schema_url(base):
 
     separator = '&' if '?' in base else '?'
     return f'{base}{separator}options=-csearch_path%3D{schema}', drop
+
+
+@pytest.fixture(autouse=True)
+def fast_password_hashing(monkeypatch):
+    monkeypatch.setattr(passwords, 'PARAMETERS', FAST_SCRYPT)
 
 
 @pytest.fixture

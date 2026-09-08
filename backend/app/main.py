@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from . import migrate
 from .settings import Settings
 from .db import Database, Workspace, User, Session, Record, records, audit, now, uid
-from .security import hash_password, check_password, token_hash, consume, resolve_input
+from .security import dummy_verify, hash_password, verify_password, token_hash, consume, resolve_input
 from .economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate, economics_summary
 from .pagination import DEFAULT_LIMIT, MAX_LIMIT, paginate, searched
 
@@ -294,9 +294,17 @@ def create_app(settings=None):
     def login(payload: Credentials, request: Request, response: Response, db=Depends(get_db)):
         consume(db, f'auth:{request.client.host}:{now()[:13]}', 20)
         user = db.query(User).filter_by(email=payload.email.lower().strip()).first()
-        if not user or not check_password(payload.password, user.password_hash):
-            if not user: hash_password(payload.password)
+        if not user:
+            dummy_verify(payload.password)   # equalise timing; the account may not exist
             raise HTTPException(401, 'Email or password is incorrect.')
+        ok, needs_rehash = verify_password(payload.password, user.password_hash)
+        if not ok:
+            raise HTTPException(401, 'Email or password is incorrect.')
+        if needs_rehash:
+            # OWASP's transition: upgrade the stored hash during a correct sign-in, so no
+            # existing user is locked out and nobody has to reset a password (P02).
+            user.password_hash = hash_password(payload.password)
+            audit(db, user, 'auth.password_rehashed')
         return start_session(db, user, response)
 
     @app.get('/api/v1/auth/me')
