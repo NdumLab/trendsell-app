@@ -27,10 +27,15 @@ export interface Scenario {
   price: number; fees: number; returns: number; marketing: number; overhead: number;
   contribution: number; margin_pct: number; cash_required: number; break_even_cac: number; break_even_units: number | null;
 }
+/** A saved assessment is immutable and self-contained: it carries the evidence it was
+ *  calculated from and the versions it must be replayed under, so an export never has to
+ *  reconstruct provenance from whatever product a screen currently has open (T03). */
 export interface Assessment {
-  id?: string; created_at?: string; product_id?: string; product_name?: string; formula_version: string;
+  id?: string; created_at?: string; product_id?: string; product_name?: string; product_asin?: string;
+  formula_version: string; threshold_version?: string; evidence_version?: string; input_author?: string;
   truth_state: Truth; currency: string; market: string; decision: Decision; confidence: number;
-  observation_ids: string[]; blockers: string[]; scenarios: Scenario[]; inputs: Inputs; input_truth_state: Truth;
+  observation_ids: string[]; evidence?: Observation[]; blockers: string[]; scenarios: Scenario[];
+  inputs: Inputs; input_truth_state: Truth;
 }
 export interface Watch { id: string; product_id: string; product_name?: string | null; threshold_pct: number; status: string; scheduled: boolean; created_at: string }
 export interface Quote { id: string; product_id: string; product_name?: string | null; supplier: string; source_url: string; unit_price_usd: number; moq: number; lead_days: number; quote_date: string; incoterm: string; notes: string; truth_state: Truth; verification: string }

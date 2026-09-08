@@ -79,6 +79,48 @@ jobs:
       - run: npm run build
         working-directory: frontend
 
+  browser:
+    name: Browser tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+      - run: pip install -r backend/requirements.lock
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run test:e2e:install
+        working-directory: frontend
+      - name: Only browser tests are discovered
+        working-directory: frontend
+        run: |
+          set -e
+          npm run test:e2e -- --list > /tmp/e2e-list.txt
+          cat /tmp/e2e-list.txt
+          if grep -qE '\.test\.ts' /tmp/e2e-list.txt; then
+            echo "Playwright discovered Vitest files"; exit 1
+          fi
+          grep -q 'e2e/.*\.spec\.ts' /tmp/e2e-list.txt
+      - name: Capture, confirm, decide, watch, quote, export and demo flows
+        working-directory: frontend
+        env:
+          TRENDSELL_E2E_PYTHON: python
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-artifacts
+          path: frontend/.playwright/
+          retention-days: 7
+
   clean-clone:
     name: Clean clone builds
     runs-on: ubuntu-latest

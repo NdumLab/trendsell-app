@@ -347,7 +347,11 @@ def create_app(settings=None):
         if old:
             return same_submission(old)
         result=calculate(payload.inputs)
-        result.update(product_id=product.id,product_name=product.payload['name'],input_author=user.id,evidence_version='no-observations/1',threshold_version=THRESHOLD_VERSION)
+        # The assessment carries its own evidence snapshot and versions, so an export never
+        # has to reconstruct provenance from whatever product a screen has open (T03).
+        result.update(product_id=product.id,product_name=product.payload['name'],product_asin=product.payload.get('asin'),
+                      input_author=user.id,evidence=[],evidence_version='no-observations/1',
+                      threshold_version=THRESHOLD_VERSION,formula_version=FORMULA_VERSION)
         row,created=insert_unique(db,user,'decision',idempotency_key,result)
         db.commit()
         # A retry after an ambiguous timeout reuses its key and must not save twice.

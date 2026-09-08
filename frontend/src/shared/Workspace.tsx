@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, post } from '@/lib/api';
+import { THRESHOLD_VERSION } from '@/lib/economics';
 import { stored } from '@/lib/utils';
 import type { Assessment, Product, Quote, User, Watch } from '@/types';
 
@@ -103,7 +104,7 @@ export function WorkspaceProvider({children}:{children:React.ReactNode}) {
     // requestKey identifies one logical submission, not one attempt: the caller keeps it
     // across retries so an ambiguous timeout cannot save the assessment twice (T06).
     saveDecision:async(result,product,requestKey)=>{
-      if(demo){const saved={...result,id:requestKey,product_id:product.id,product_name:product.name,truth_state:'Demo' as const,created_at:new Date().toISOString()};setDemoDecisions(prev=>[saved,...prev.filter(d=>d.id!==requestKey)]);return saved;}
+      if(demo){const saved={...result,id:requestKey,product_id:product.id,product_name:product.name,product_asin:product.asin,evidence:product.observations,evidence_version:'demo-fixture/1',threshold_version:THRESHOLD_VERSION,truth_state:'Demo' as const,created_at:new Date().toISOString()};setDemoDecisions(prev=>[saved,...prev.filter(d=>d.id!==requestKey)]);return saved;}
       const saved=await post<Assessment>('/decisions',{product_id:product.id,inputs:result.inputs},requestKey);await refresh();return saved;
     },
     saveQuote:async quote=>{if(demo)setDemoQuotes(prev=>[{...quote,id:crypto.randomUUID(),truth_state:'Demo',verification:'Unverified'},...prev]);else{await post('/quotes',quote);await refresh();}},
