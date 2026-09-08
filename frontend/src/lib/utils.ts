@@ -1,7 +1,11 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 export const cn = (...values: ClassValue[]) => twMerge(clsx(values));
-export const formatMoney = (value: number, currency = 'NGN') => new Intl.NumberFormat('en-NG', { style: 'currency', currency, maximumFractionDigits: 0 }).format(value);
+/** Detailed money: the currency's own precision, so USD 8.40 is not shown as US$8 (action plan T04).
+ *  Use this for anything a user compares or re-enters — quotes, per-unit economics, targets. */
+export const formatMoney = (value: number, currency = 'NGN') => new Intl.NumberFormat('en-NG', { style: 'currency', currency }).format(value);
+/** Rounded money for summary figures where the minor unit is noise, such as total order cash. */
+export const formatCompact = (value: number, currency = 'NGN') => new Intl.NumberFormat('en-NG', { style: 'currency', currency, maximumFractionDigits: 0 }).format(value);
 export const dateTime = (value?: string | null) => value ? new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Never collected';
 export const relativeTime = (value: string) => {
   const hours = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 3600000));

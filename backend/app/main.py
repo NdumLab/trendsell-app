@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from .settings import Settings
 from .db import Database, Workspace, User, Session, Record, records, audit, now, uid
 from .security import hash_password, check_password, token_hash, consume, resolve_input
-from .economics import Inputs, calculate
+from .economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate
 
 SOURCES = [
     {'id':'amazon', 'name':'Amazon catalog', 'category':'Product identity', 'markets':['US'], 'reason':'An authorized catalog connection is required. Pasted identifiers are user input, not verified catalog data.', 'rights':'Authorization required'},
@@ -277,7 +277,7 @@ def create_app(settings=None):
             if old.payload['product_id']!=payload.product_id or old.payload['inputs']!=payload.inputs.model_dump(): raise HTTPException(409,'Idempotency key already used.')
             return serialize(old)
         result=calculate(payload.inputs)
-        result.update(product_id=product.id,product_name=product.payload['name'],input_author=user.id,evidence_version='no-observations/1',threshold_version='decision-gates/1.0.0')
+        result.update(product_id=product.id,product_name=product.payload['name'],input_author=user.id,evidence_version='no-observations/1',threshold_version=THRESHOLD_VERSION)
         row=insert(db,user,'decision',result,idempotency_key)
         db.commit()
         return serialize(row)

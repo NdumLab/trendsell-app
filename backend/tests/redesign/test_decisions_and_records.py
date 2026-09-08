@@ -1,7 +1,7 @@
 """Saved decisions, supplier quotes and watches: reproducible, immutable, workspace-scoped."""
 import pytest
 
-from app.economics import Inputs, calculate
+from app.economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate
 from conftest import HEADERS
 
 AMAZON = 'https://www.amazon.com/dp/B0ABCDEFGH'
@@ -37,8 +37,8 @@ def test_a_decision_needs_a_confirmed_product(client, product):
 def test_a_saved_decision_keeps_its_inputs_and_versions(client, confirmed):
     saved = save(client, confirmed).json()
     assert saved['inputs'] == INPUTS
-    assert saved['formula_version'] == 'unit-economics/1.0.0'
-    assert saved['threshold_version'] == 'decision-gates/1.0.0'
+    assert saved['formula_version'] == FORMULA_VERSION
+    assert saved['threshold_version'] == THRESHOLD_VERSION
     assert saved['input_truth_state'] == 'User input'
     assert saved['truth_state'] == 'Calculated'
     assert saved['created_at'] and saved['id']
@@ -46,9 +46,18 @@ def test_a_saved_decision_keeps_its_inputs_and_versions(client, confirmed):
 
 def test_a_saved_decision_is_reproducible_from_its_stored_payload(client, confirmed):
     saved = client.get(f'/api/v1/decisions/{save(client, confirmed).json()["id"]}').json()
-    replayed = calculate(Inputs(**saved['inputs']))
+    replayed = calculate(Inputs(**saved['inputs']), formula_version=saved['formula_version'])
     for field in ('decision', 'scenarios', 'blockers', 'confidence', 'currency', 'market', 'formula_version'):
         assert replayed[field] == saved[field], field
+
+
+def test_a_saved_decision_records_the_version_it_must_be_replayed_under(client, confirmed):
+    """A stored assessment is replayed with its own formula version, never the current one."""
+    saved = client.get(f'/api/v1/decisions/{save(client, confirmed).json()["id"]}').json()
+    assert saved['formula_version'] in {'unit-economics/1.0.0', 'unit-economics/1.1.0'}
+    under_legacy = calculate(Inputs(**saved['inputs']), formula_version='unit-economics/1.0.0')
+    assert under_legacy['formula_version'] == 'unit-economics/1.0.0'
+    assert under_legacy['formula_version'] != saved['formula_version']
 
 
 def test_a_decision_without_observations_cannot_be_a_go(client, confirmed):

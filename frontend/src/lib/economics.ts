@@ -1,18 +1,73 @@
 import type { Assessment, Inputs } from '@/types';
-export const FORMULA_VERSION = 'unit-economics/1.0.0';
-const money = (value: number) => Math.sign(value) * Math.round((Math.abs(value) + Number.EPSILON) * 100) / 100;
+import { ceilUnits, div, money, mul, parse } from '@/lib/money';
+
+/** Two formula versions exist on purpose (action plan T04).
+ *
+ *  `unit-economics/1.0.0` is the float implementation the pilot shipped. It disagreed
+ *  with the server on some accepted inputs, so nothing new is calculated with it — but
+ *  assessments already saved under it must still replay to the values they were saved
+ *  with, so `calculateV1_0_0` stays.
+ *
+ *  `unit-economics/1.1.0` is the current version: identical formulas, evaluated with the
+ *  shared scaled-integer arithmetic in `money.ts` so the browser and the API agree exactly. */
+export const FORMULA_VERSION = 'unit-economics/1.1.0';
+export const THRESHOLD_VERSION = 'decision-gates/1.0.0';
+
 export interface EvidenceGate { confidence: number; coverage: boolean; compliance_resolved: boolean; overall: number | null; observation_ids: string[] }
-export function calculate(i: Inputs, evidence: EvidenceGate = { confidence: 0, coverage: false, compliance_resolved: false, overall: null, observation_ids: [] }): Assessment {
+export const NO_EVIDENCE: EvidenceGate = { confidence: 0, coverage: false, compliance_resolved: false, overall: null, observation_ids: [] };
+
+type ScenarioRow = Assessment['scenarios'][number];
+
+/** Legacy (1.0.0) rounding. Kept only so stored assessments replay unchanged. */
+const legacyMoney = (value: number) => Math.sign(value) * Math.round((Math.abs(value) + Number.EPSILON) * 100) / 100;
+
+function scenariosV1_0_0(i: Inputs): ScenarioRow[] {
   const factors: [string, number, number][] = [['Downside', 1-i.stress_pct/100, 1+i.stress_pct/100], ['Base', 1, 1], ['Upside', 1+i.stress_pct/100, 1-i.stress_pct/100]];
-  const scenarios = factors.map(([name, priceFactor, costFactor]) => {
+  return factors.map(([name, priceFactor, costFactor]) => {
     const supplier = i.unit_cost_usd*i.fx_ngn*costFactor, freight = i.freight_ngn/i.quantity*costFactor;
     const duty = (supplier+freight)*i.duty_pct/100, importTax = (supplier+freight+duty)*i.import_tax_pct/100;
     const landed = supplier+freight+duty+importTax, price = i.selling_price_ngn*priceFactor;
     const fees = price*i.channel_fee_pct/100, returns = price*i.returns_pct/100, marketing = i.marketing_ngn/i.quantity, overhead = i.fixed_cost_ngn/i.quantity;
     const contribution = price-landed-fees-returns-marketing-overhead, beforeFixed = price-landed-fees-returns;
-    return { name, supplier: money(supplier), freight: money(freight), duty: money(duty), import_tax: money(importTax), landed_cost: money(landed), price: money(price), fees: money(fees), returns: money(returns), marketing: money(marketing), overhead: money(overhead), contribution: money(contribution), margin_pct: money(contribution/price*100), cash_required: money(landed*i.quantity+i.marketing_ngn+i.fixed_cost_ngn), break_even_cac: money(Math.max(0,beforeFixed-overhead)), break_even_units: beforeFixed>0 ? Math.ceil((i.marketing_ngn+i.fixed_cost_ngn)/beforeFixed) : null };
+    return { name, supplier: legacyMoney(supplier), freight: legacyMoney(freight), duty: legacyMoney(duty), import_tax: legacyMoney(importTax), landed_cost: legacyMoney(landed), price: legacyMoney(price), fees: legacyMoney(fees), returns: legacyMoney(returns), marketing: legacyMoney(marketing), overhead: legacyMoney(overhead), contribution: legacyMoney(contribution), margin_pct: legacyMoney(contribution/price*100), cash_required: legacyMoney(landed*i.quantity+i.marketing_ngn+i.fixed_cost_ngn), break_even_cac: legacyMoney(Math.max(0,beforeFixed-overhead)), break_even_units: beforeFixed>0 ? Math.ceil((i.marketing_ngn+i.fixed_cost_ngn)/beforeFixed) : null };
   });
-  const base=scenarios[1], downside=scenarios[0], blockers: string[]=[];
+}
+
+/** The same formulas on scaled integers, so the server can match exactly. */
+function scenariosV1_1_0(i: Inputs): ScenarioRow[] {
+  const one = parse(1), hundred = parse(100);
+  const quantity = parse(i.quantity);
+  const unitCost = parse(i.unit_cost_usd), fx = parse(i.fx_ngn);
+  const freightTotal = parse(i.freight_ngn);
+  const dutyRate = div(parse(i.duty_pct), hundred), taxRate = div(parse(i.import_tax_pct), hundred);
+  const sellingPrice = parse(i.selling_price_ngn);
+  const feeRate = div(parse(i.channel_fee_pct), hundred), returnsRate = div(parse(i.returns_pct), hundred);
+  const marketingTotal = parse(i.marketing_ngn), fixedTotal = parse(i.fixed_cost_ngn);
+  const stress = div(parse(i.stress_pct), hundred);
+  const factors: [string, bigint, bigint][] = [['Downside', one-stress, one+stress], ['Base', one, one], ['Upside', one+stress, one-stress]];
+  return factors.map(([name, priceFactor, costFactor]) => {
+    const supplier = mul(mul(unitCost, fx), costFactor);
+    const freight = mul(div(freightTotal, quantity), costFactor);
+    const duty = mul(supplier+freight, dutyRate);
+    const importTax = mul(supplier+freight+duty, taxRate);
+    const landed = supplier+freight+duty+importTax;
+    const price = mul(sellingPrice, priceFactor);
+    const fees = mul(price, feeRate), returns = mul(price, returnsRate);
+    const marketing = div(marketingTotal, quantity), overhead = div(fixedTotal, quantity);
+    const contribution = price-landed-fees-returns-marketing-overhead;
+    const beforeFixed = price-landed-fees-returns;
+    return { name, supplier: money(supplier), freight: money(freight), duty: money(duty), import_tax: money(importTax), landed_cost: money(landed), price: money(price), fees: money(fees), returns: money(returns), marketing: money(marketing), overhead: money(overhead), contribution: money(contribution), margin_pct: money(mul(div(contribution, price), hundred)), cash_required: money(mul(landed, quantity)+marketingTotal+fixedTotal), break_even_cac: money(beforeFixed-overhead > 0n ? beforeFixed-overhead : 0n), break_even_units: beforeFixed > 0n ? ceilUnits(div(marketingTotal+fixedTotal, beforeFixed)) : null };
+  });
+}
+
+const SCENARIO_FORMULAS: Record<string, (i: Inputs) => ScenarioRow[]> = {
+  'unit-economics/1.0.0': scenariosV1_0_0,
+  'unit-economics/1.1.0': scenariosV1_1_0,
+};
+
+/** The decision gates. Unchanged by T04 and versioned separately as THRESHOLD_VERSION. */
+export function gates(scenarios: ScenarioRow[], i: Inputs, evidence: EvidenceGate): { decision: Assessment['decision']; blockers: string[] } {
+  const base = scenarios[1], downside = scenarios[0], blockers: string[] = [];
   if (!evidence.coverage) blockers.push('Collect independent demand signals and destination-market evidence.');
   if (!evidence.compliance_resolved) blockers.push('Obtain a reviewed product classification and current import requirements.');
   if (evidence.confidence<70) blockers.push('Raise evidence confidence to at least 70 before committing inventory.');
@@ -24,8 +79,20 @@ export function calculate(i: Inputs, evidence: EvidenceGate = { confidence: 0, c
   else if(base.margin_pct<15 || (evidence.overall!==null && evidence.overall<55)) decision='NO-GO';
   else if(!blockers.length && (evidence.overall||0)>=75) decision='GO';
   else decision='WATCH';
-  return {formula_version:FORMULA_VERSION,truth_state:'Calculated',currency:'NGN',market:'NG',decision,confidence:evidence.confidence,observation_ids:evidence.observation_ids,blockers,scenarios,inputs:i,input_truth_state:'User input'};
+  return { decision, blockers };
 }
+
+/** Scenarios and gates for `i`.
+ *  `formulaVersion` exists so a stored assessment replays under the version it was saved
+ *  with. Callers producing a *new* assessment must leave it at the default. */
+export function calculate(i: Inputs, evidence: EvidenceGate = NO_EVIDENCE, formulaVersion: string = FORMULA_VERSION): Assessment {
+  const build = SCENARIO_FORMULAS[formulaVersion];
+  if (!build) throw new Error(`unknown formula version: ${formulaVersion}`);
+  const scenarios = build(i);
+  const { decision, blockers } = gates(scenarios, i, evidence);
+  return {formula_version:formulaVersion,truth_state:'Calculated',currency:'NGN',market:'NG',decision,confidence:evidence.confidence,observation_ids:evidence.observation_ids,blockers,scenarios,inputs:i,input_truth_state:'User input'};
+}
+
 export type NumericKey = Exclude<keyof Inputs,'compliance'|'channel'|'shipping'>;
 const SENSITIVITY_KEYS: NumericKey[] = ['unit_cost_usd','fx_ngn','freight_ngn','duty_pct','import_tax_pct','selling_price_ngn','channel_fee_pct','returns_pct','marketing_ngn','fixed_cost_ngn','quantity'];
 export interface Swing { key: NumericKey; low: number; high: number; swing: number }
