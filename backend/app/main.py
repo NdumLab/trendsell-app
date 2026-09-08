@@ -133,6 +133,28 @@ def create_app(settings=None):
         audit(db, user, kind+'.created', row.id)
         return row
 
+    def insert_unique(db, user, kind, key, payload):
+        """Insert one keyed record, or return the row a concurrent request inserted first.
+
+        The unique constraint is (workspace_id, kind, key), and the violation surfaces at
+        the flush inside this savepoint (action plan T06). Catching it here rather than
+        around a later commit is what keeps a duplicate submission from becoming a 500:
+        the savepoint rolls back, the outer transaction stays usable, and the caller is
+        handed the winning row with `created=False` so it can converge on one result.
+        """
+        try:
+            with db.begin_nested():
+                row = Record(workspace_id=user.workspace_id, kind=kind, key=key, payload=payload)
+                db.add(row)
+                db.flush()
+        except IntegrityError:
+            row = records(db, user, kind).filter_by(key=key).first()
+            if row is None:
+                raise
+            return row, False
+        audit(db, user, kind+'.created', row.id)
+        return row, True
+
     def user_view(user):
         return {'id':user.id, 'name':user.name, 'email':user.email, 'workspace_id':user.workspace_id, 'role':user.role}
 
@@ -218,6 +240,12 @@ def create_app(settings=None):
             row.payload = p
             db.commit()
 
+    def matching_job(existing, request_hash):
+        """The stored job for a reused key, or 409 when the key described another request."""
+        if existing.payload['request_hash'] != request_hash:
+            raise HTTPException(409,'Idempotency key was used for a different request.')
+        return serialize(existing)
+
     def queue_job(payload, db, user, background, idempotency_key):
         identity = resolve_input(payload.input)
         request_hash = hashlib.sha256(json.dumps(payload.model_dump(),sort_keys=True).encode()).hexdigest()
@@ -225,17 +253,17 @@ def create_app(settings=None):
         if len(key)>128: raise HTTPException(422,'Idempotency key is too long.')
         existing = records(db,user,'job').filter_by(key=key).first()
         if existing:
-            if existing.payload['request_hash'] != request_hash: raise HTTPException(409,'Idempotency key was used for a different request.')
-            return serialize(existing)
+            return matching_job(existing, request_hash)
+        canonical, _ = insert_unique(db,user,'product',identity['asin'],{'name':f"Amazon product · {identity['asin']}", 'asin':identity['asin'], 'source_url':identity['url'], 'market':'NG','discovery_market':'US','confirmed':False,'truth_state':'User input','decision':'INSUFFICIENT EVIDENCE','confidence':0,'category':'Unclassified','stage':'Needs evidence','blocker':'Confirm product identity and connect a demand source.','observations':[]})
+        job, created = insert_unique(db,user,'job',key,{'status':'queued','product_id':canonical.id,'request_hash':request_hash,'events':[{'id':1,'step':'Amazon identifier captured','status':'succeeded','detail':'Parsed from your input. No external page was fetched.','at':now()}]})
+        if not created:
+            # A concurrent request with the same key won. Converge on its job and do not
+            # charge the research entitlement twice for one logical submission.
+            db.commit()
+            return matching_job(job, request_hash)
+        # Charged only once we hold the job row. consume() commits, so a rejected quota
+        # rolls the job back rather than leaving an unrunnable record behind.
         consume(db, f'research:{user.workspace_id}:{now()[:10]}', settings.research_daily_limit)
-        canonical = records(db,user,'product').filter_by(key=identity['asin']).first()
-        if not canonical:
-            canonical = insert(db,user,'product',{'name':f"Amazon product · {identity['asin']}", 'asin':identity['asin'], 'source_url':identity['url'], 'market':'NG','discovery_market':'US','confirmed':False,'truth_state':'User input','decision':'INSUFFICIENT EVIDENCE','confidence':0,'category':'Unclassified','stage':'Needs evidence','blocker':'Confirm product identity and connect a demand source.','observations':[]},identity['asin'])
-        job = insert(db,user,'job', {'status':'queued','product_id':canonical.id,'request_hash':request_hash,'events':[{'id':1,'step':'Amazon identifier captured','status':'succeeded','detail':'Parsed from your input. No external page was fetched.','at':now()}]},key)
-        try: db.commit()
-        except IntegrityError:
-            db.rollback()
-            raise HTTPException(409,'Another request is creating this investigation. Retry with the same idempotency key.')
         background.add_task(run_job, job.id, user.workspace_id)
         return serialize(job)
 
@@ -272,15 +300,19 @@ def create_app(settings=None):
     def decision(payload:DecisionRequest, idempotency_key:str=Header(min_length=1,max_length=128), user=Depends(writer), db=Depends(get_db)):
         product=owned(db,user,'product',payload.product_id)
         if not product.payload['confirmed']: raise HTTPException(409,'Confirm product identity before saving a decision.')
+        def same_submission(existing):
+            if existing.payload['product_id']!=payload.product_id or existing.payload['inputs']!=payload.inputs.model_dump():
+                raise HTTPException(409,'Idempotency key already used.')
+            return serialize(existing)
         old=records(db,user,'decision').filter_by(key=idempotency_key).first()
         if old:
-            if old.payload['product_id']!=payload.product_id or old.payload['inputs']!=payload.inputs.model_dump(): raise HTTPException(409,'Idempotency key already used.')
-            return serialize(old)
+            return same_submission(old)
         result=calculate(payload.inputs)
         result.update(product_id=product.id,product_name=product.payload['name'],input_author=user.id,evidence_version='no-observations/1',threshold_version=THRESHOLD_VERSION)
-        row=insert(db,user,'decision',result,idempotency_key)
+        row,created=insert_unique(db,user,'decision',idempotency_key,result)
         db.commit()
-        return serialize(row)
+        # A retry after an ambiguous timeout reuses its key and must not save twice.
+        return serialize(row) if created else same_submission(row)
 
     @app.get('/api/v1/decisions')
     def decisions(user=Depends(current_user),db=Depends(get_db)):
@@ -297,12 +329,16 @@ def create_app(settings=None):
     @app.post('/api/v1/watchlists/default/items')
     def watch(payload:WatchRequest,user=Depends(writer),db=Depends(get_db)):
         owned(db,user,'product',payload.product_id)
-        row=records(db,user,'watch').filter_by(key=payload.product_id).first()
         body={**payload.model_dump(),'status':'Awaiting evidence','delivery':'In-app','scheduled':False}
-        if row:
-            row.payload=body
-            audit(db,user,'watch.updated',row.id)
-        else: row=insert(db,user,'watch',body,payload.product_id)
+        row=records(db,user,'watch').filter_by(key=payload.product_id).first()
+        if not row:
+            # Two concurrent watches on one product converge on a single rule.
+            row,created=insert_unique(db,user,'watch',payload.product_id,body)
+            if created:
+                db.commit()
+                return serialize(row)
+        row.payload=body
+        audit(db,user,'watch.updated',row.id)
         db.commit()
         return serialize(row)
 

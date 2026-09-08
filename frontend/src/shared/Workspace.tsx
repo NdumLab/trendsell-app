@@ -11,7 +11,7 @@ interface Store {
   enterDemo: ()=>Promise<void>; exitDemo: ()=>void; refresh: ()=>Promise<void>; requireUser: ()=>boolean;
   addDemoProduct: (p: Product)=>void; confirm: (id:string,name:string)=>Promise<Product>;
   watch: (id:string,threshold?:number)=>Promise<void>; unwatch: (id:string)=>Promise<void>;
-  saveDecision: (result:Assessment, product:Product)=>Promise<Assessment>;
+  saveDecision: (result:Assessment, product:Product, requestKey:string)=>Promise<Assessment>;
   saveQuote: (quote:QuoteDraft)=>Promise<void>;
 }
 const Context=createContext<Store>(null!);
@@ -58,9 +58,11 @@ export function WorkspaceProvider({children}:{children:React.ReactNode}) {
       else {await post('/watchlists/default/items',{product_id,threshold_pct});await refresh();}
     },
     unwatch:async id=>{if(demo)setDemoWatches(prev=>prev.filter(w=>w.id!==id));else{await api(`/watchlists/default/items/${id}`,{method:'DELETE'});await refresh();}},
-    saveDecision:async(result,product)=>{
-      if(demo){const saved={...result,id:crypto.randomUUID(),product_id:product.id,product_name:product.name,truth_state:'Demo' as const,created_at:new Date().toISOString()};setDemoDecisions(prev=>[saved,...prev]);return saved;}
-      const saved=await post<Assessment>('/decisions',{product_id:product.id,inputs:result.inputs},crypto.randomUUID());await refresh();return saved;
+    // requestKey identifies one logical submission, not one attempt: the caller keeps it
+    // across retries so an ambiguous timeout cannot save the assessment twice (T06).
+    saveDecision:async(result,product,requestKey)=>{
+      if(demo){const saved={...result,id:requestKey,product_id:product.id,product_name:product.name,truth_state:'Demo' as const,created_at:new Date().toISOString()};setDemoDecisions(prev=>[saved,...prev.filter(d=>d.id!==requestKey)]);return saved;}
+      const saved=await post<Assessment>('/decisions',{product_id:product.id,inputs:result.inputs},requestKey);await refresh();return saved;
     },
     saveQuote:async quote=>{if(demo)setDemoQuotes(prev=>[{...quote,id:crypto.randomUUID(),truth_state:'Demo',verification:'Unverified'},...prev]);else{await post('/quotes',quote);await refresh();}},
   };
