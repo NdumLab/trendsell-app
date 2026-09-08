@@ -15,6 +15,10 @@ the [September 2026 application review](docs/APP_REVIEW_2026-09-08.md) and produ
 It defines work items, dependencies, acceptance checks, and release gates; planned features are not
 claims about what this release already supports.
 
+Operational and policy documents: [runbook](docs/RUNBOOK.md) for schema, release, rollback and
+recovery; [permissions, privacy and retention](docs/PRIVACY_AND_PERMISSIONS.md) for what the
+pilot enforces and stores, and what it does not.
+
 ---
 
 ## The evidence rule

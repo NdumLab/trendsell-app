@@ -107,4 +107,20 @@ These are known and tracked, not oversights:
 * No scheduled collection runs, so no backup covers collector state — there is none yet.
 * Email delivery is unconfigured. Account recovery uses a local sink in development and is
   not available in production until a provider is chosen (action plan P03).
-* No alerting is wired to an on-call destination (action plan P07).
+* No alerting is wired to an on-call destination (action plan P07). Counters are exposed at
+  `GET /api/v1/ops/metrics` for an owner, and every request is logged as JSON with an id;
+  nothing yet forwards either to a paging destination.
+* Account and workspace deletion is not implemented — see
+  [permissions, privacy and retention](PRIVACY_AND_PERMISSIONS.md).
+
+## Diagnosing a failure
+
+Every response carries `X-Request-ID`, every log line for that request carries the same id,
+and so does every audit event the request wrote. Given an id from a user or a proxy log:
+
+    journalctl -u trendsell --since '30 min ago' | grep '"request_id":"<id>"'
+
+then, as the workspace owner, `GET /api/v1/audit` and match `request_id` to see exactly
+which records that request changed. `GET /api/v1/ops/metrics` gives per-worker request,
+status, server-error, rate-limit and latency counters; they reset on restart, so read a
+value as a floor rather than a fleet total.

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import secrets
+import time
 from typing import Literal
 from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response, BackgroundTasks, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +16,8 @@ from .settings import Settings
 from .db import Database, Workspace, User, Session, Record, records, audit, now, uid
 from .security import dummy_verify, hash_password, verify_password, token_hash, consume, purge_expired, resolve_input
 from .limits import BodyLimit, MAX_BODY_BYTES
+from .observability import Counters, REQUEST_ID, USER_ID, WORKSPACE_ID, logger, new_request_id, route_label
+from .permissions import matrix, require
 from .economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate, economics_summary
 from .pagination import DEFAULT_LIMIT, MAX_LIMIT, paginate, searched
 
@@ -113,20 +116,52 @@ def create_app(settings=None):
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.origins), allow_credentials=True,
                        allow_methods=['GET','POST','PUT','DELETE'], allow_headers=['Content-Type','Idempotency-Key','X-Requested-With'])
 
+    counters = Counters()
+    app.state.counters = counters
+
     @app.middleware('http')
     async def guard(request, call_next):
-        if request.method in {'POST','PUT','PATCH','DELETE'}:
-            origin = request.headers.get('origin')
-            if (origin and origin not in settings.origins) or request.headers.get('x-requested-with') != 'TrendSell':
-                return JSONResponse({'detail':'Request origin or CSRF header rejected'}, status_code=403)
-        response = await call_next(request)
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        response.headers['X-Frame-Options'] = 'DENY'
-        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-        response.headers['Cache-Control'] = 'no-store'
-        if settings.environment == 'production':
-            response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-        return response
+        # One id per request: returned to the caller, written on every log line, and
+        # stored on the audit events the request produces (action plan P07).
+        identifier = new_request_id(request.headers.get('x-request-id'))
+        request_token = REQUEST_ID.set(identifier)
+        workspace_token, user_token = WORKSPACE_ID.set('-'), USER_ID.set('-')
+        started = time.perf_counter()
+        try:
+            if request.method in {'POST','PUT','PATCH','DELETE'}:
+                origin = request.headers.get('origin')
+                if (origin and origin not in settings.origins) or request.headers.get('x-requested-with') != 'TrendSell':
+                    response = JSONResponse({'detail':'Request origin or CSRF header rejected'}, status_code=403)
+                else:
+                    response = await call_next(request)
+            else:
+                response = await call_next(request)
+            duration_ms = (time.perf_counter() - started) * 1000
+            counters.record(request.method, request.url.path, response.status_code, duration_ms)
+            # No body, no query string, no cookie: a route label, an outcome and who it was.
+            logger.info('request', extra={'request_id': identifier, 'context': {
+                'method': request.method, 'route': route_label(request.url.path),
+                'status': response.status_code, 'duration_ms': round(duration_ms, 1),
+                'workspace_id': WORKSPACE_ID.get(), 'user_id': USER_ID.get()}})
+            response.headers['X-Request-ID'] = identifier
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            response.headers['X-Frame-Options'] = 'DENY'
+            response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+            response.headers['Cache-Control'] = 'no-store'
+            if settings.environment == 'production':
+                response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+            return response
+        except Exception:
+            duration_ms = (time.perf_counter() - started) * 1000
+            counters.record(request.method, request.url.path, 500, duration_ms)
+            logger.exception('request failed', extra={'request_id': identifier, 'context': {
+                'method': request.method, 'route': route_label(request.url.path),
+                'duration_ms': round(duration_ms, 1), 'workspace_id': WORKSPACE_ID.get()}})
+            raise
+        finally:
+            REQUEST_ID.reset(request_token)
+            WORKSPACE_ID.reset(workspace_token)
+            USER_ID.reset(user_token)
 
     def get_db():
         with database.session() as db:
@@ -139,12 +174,20 @@ def create_app(settings=None):
             raise HTTPException(401, 'Sign in to your workspace to continue.')
         user = db.get(User, session.user_id)
         if not user: raise HTTPException(401, 'Session is no longer valid.')
+        WORKSPACE_ID.set(user.workspace_id)
+        USER_ID.set(user.id)
         return user
 
-    def writer(request: Request, user=Depends(current_user), db=Depends(get_db)):
-        if user.role not in {'owner','analyst'}:
-            raise HTTPException(403, 'Your workspace role is read-only.')
-        consume(db, f'write:{user.workspace_id}:{now()[:16]}', 60)
+    def permitted(permission):
+        """A dependency that asks for a named permission, never for a role (P05)."""
+        def dependency(user=Depends(current_user)):
+            return require(user, permission)
+        return dependency
+
+    def writer(user=Depends(permitted('workspace.write')), db=Depends(get_db)):
+        # A fair per-workspace write quota, so one busy workspace cannot crowd out another.
+        consume(db, f'write:{user.workspace_id}:{now()[:16]}', settings.workspace_write_minute_limit,
+                message='This workspace is making changes too quickly. Try again in a moment.')
         return user
 
     def owned(db, user, kind, record_id):
@@ -237,7 +280,7 @@ def create_app(settings=None):
             if row is None:
                 raise
             return row, False
-        audit(db, user, kind+'.created', row.id)
+        audit(db, user, kind+'.created', row.id, kind=kind)
         return row, True
 
     def user_view(user):
@@ -414,7 +457,7 @@ def create_app(settings=None):
     def confirm(product_id:str, payload:ConfirmRequest, user=Depends(writer), db=Depends(get_db)):
         row=owned(db,user,'product',product_id)
         row.payload={**row.payload,'name':payload.name.strip(),'confirmed':True,'confirmed_at':now(),'blocker':'Collect independent demand and local-market evidence.'}
-        audit(db,user,'product.confirmed',product_id)
+        audit(db,user,'product.confirmed',product_id,kind='product',name_length=len(payload.name))
         db.commit()
         return serialize(row)
 
@@ -437,6 +480,9 @@ def create_app(settings=None):
                       threshold_version=THRESHOLD_VERSION,formula_version=FORMULA_VERSION,
                       economics=economics_summary(result['scenarios']))
         row,created=insert_unique(db,user,'decision',idempotency_key,result)
+        if created:
+            audit(db,user,'decision.saved',row.id,product_id=product.id,decision=result['decision'],
+                  formula_version=result['formula_version'],threshold_version=result['threshold_version'])
         db.commit()
         # A retry after an ambiguous timeout reuses its key and must not save twice.
         return serialize(row) if created else same_submission(row)
@@ -477,7 +523,7 @@ def create_app(settings=None):
     @app.delete('/api/v1/watchlists/default/items/{watch_id}')
     def unwatch(watch_id:str,user=Depends(writer),db=Depends(get_db)):
         row=owned(db,user,'watch',watch_id)
-        audit(db,user,'watch.removed',row.id)
+        audit(db,user,'watch.removed',row.id,product_id=row.payload.get('product_id'))
         db.delete(row)
         db.commit()
         return {'status':'removed'}
@@ -514,7 +560,7 @@ def create_app(settings=None):
         }
 
     @app.get('/api/v1/export')
-    def export_workspace(user=Depends(current_user)):
+    def export_workspace(user=Depends(permitted('workspace.export'))):
         """Every authorised record in this workspace, exactly once, independent of paging.
 
         The generator opens its own session: a dependency-provided one is closed before a
@@ -536,6 +582,11 @@ def create_app(settings=None):
                         separator = ','
                     yield ']'
                 yield '}'
+        with database.session() as audit_db:
+            # A download is an event worth keeping: who took the whole workspace, and when.
+            audit(audit_db, user, 'workspace.exported', scope='all-records',
+                  schema='trendsell-workspace-export/1')
+            audit_db.commit()
         filename = f'trendsell-workspace-{now()[:10]}.json'
         return StreamingResponse(document(), media_type='application/json',
                                  headers={'Content-Disposition': f'attachment; filename="{filename}"'})
@@ -546,14 +597,31 @@ def create_app(settings=None):
         try: datetime.strptime(payload.quote_date,'%Y-%m-%d')
         except ValueError: raise HTTPException(422,'Quote date is invalid.')
         row=insert(db,user,'quote',{**payload.model_dump(),'truth_state':'User input','verification':'Unverified','input_author':user.id,'market':'NG'})
+        audit(db,user,'quote.recorded',row.id,product_id=payload.product_id,incoterm=payload.incoterm,quote_date=payload.quote_date)
         db.commit()
         return serialize(row)
 
     @app.get('/api/v1/audit')
-    def audit_log(user=Depends(current_user),db=Depends(get_db)):
+    def audit_log(limit: int = 100, user=Depends(permitted('audit.read')), db=Depends(get_db)):
         from .db import Audit
-        if user.role!='owner': raise HTTPException(403,'Owner access required.')
-        return {'events':[{'action':r.action,'record_id':r.record_id,'created_at':r.created_at} for r in db.query(Audit).filter_by(workspace_id=user.workspace_id).order_by(Audit.created_at.desc()).limit(100).all()]}
+        if limit < 1 or limit > 500: raise HTTPException(422, 'Page size must be between 1 and 500.')
+        rows = db.query(Audit).filter_by(workspace_id=user.workspace_id).order_by(Audit.created_at.desc()).limit(limit).all()
+        return {'events':[{'action':r.action, 'actor':r.user_id, 'workspace_id':r.workspace_id,
+                           'record_id':r.record_id, 'request_id':r.request_id, 'detail':r.detail,
+                           'created_at':r.created_at} for r in rows],
+                'total': db.query(Audit).filter_by(workspace_id=user.workspace_id).count()}
+
+    @app.get('/api/v1/permissions')
+    def permissions(user=Depends(current_user)):
+        """The permission matrix and this user's place in it. Enforced server-side (P05)."""
+        table = matrix()
+        return {**table, 'role': user.role, 'granted': table['roles'].get(user.role, [])}
+
+    @app.get('/api/v1/ops/metrics')
+    def metrics(user=Depends(permitted('workspace.admin'))):
+        """Operational counters for this worker. No workspace data (action plan P07)."""
+        return {**counters.snapshot(), 'environment': settings.environment,
+                'schema_revision': migrate.head_revision(settings.database_url)}
 
     @app.api_route('/api/{retired:path}',methods=['GET','POST','PUT','DELETE'])
     def retired(retired:str):

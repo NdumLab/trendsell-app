@@ -50,13 +50,21 @@ class Record(Base):
     __table_args__ = (UniqueConstraint('workspace_id', 'kind', 'key'),)
 
 class Audit(Base):
+    """Append-only record of who did what, to which record, under which request.
+
+    `detail` carries small non-secret facts about the target — its kind, the version
+    referenced, an export's scope — so an entry can be read without re-deriving context
+    from the record it names. It never holds credentials or record payloads (P05/P07).
+    """
     __tablename__ = 'audit_events'
     id = Column(String, primary_key=True, default=uid)
     workspace_id = Column(String, ForeignKey('workspaces.id'), nullable=False, index=True)
     user_id = Column(String, ForeignKey('users.id'), nullable=False)
     action = Column(String, nullable=False)
     record_id = Column(String)
-    created_at = Column(String, nullable=False, default=now)
+    request_id = Column(String, index=True)
+    detail = Column(Payload)
+    created_at = Column(String, nullable=False, default=now, index=True)
 
 class RateBucket(Base):
     """One counter for one key in one window.
@@ -87,5 +95,11 @@ class Database:
 def records(db, user, kind):
     return db.query(Record).filter_by(workspace_id=user.workspace_id, kind=kind)
 
-def audit(db, user, action, record_id=None):
-    db.add(Audit(workspace_id=user.workspace_id, user_id=user.id, action=action, record_id=record_id))
+def audit(db, user, action, record_id=None, **detail):
+    """Append one audit event, tagged with the request that caused it.
+
+    Callers pass small facts as keyword arguments; never a payload, a body or a secret.
+    """
+    from .observability import request_id
+    db.add(Audit(workspace_id=user.workspace_id, user_id=user.id, action=action, record_id=record_id,
+                 request_id=request_id(), detail=detail or None))

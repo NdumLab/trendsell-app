@@ -17,6 +17,8 @@ class Settings:
     login_ip_hourly_limit: int = 30
     login_account_hourly_limit: int = 10
     register_ip_hourly_limit: int = 10
+    #: Writes per workspace per minute, so one busy workspace cannot crowd out another.
+    workspace_write_minute_limit: int = 60
 
     @classmethod
     def from_env(cls):
@@ -45,4 +47,5 @@ class Settings:
                    os.getenv('ALLOW_REGISTRATION', 'false' if env == 'production' else 'true') == 'true', limit,
                    hourly('LOGIN_IP_HOURLY_LIMIT', 30),
                    hourly('LOGIN_ACCOUNT_HOURLY_LIMIT', 10),
-                   hourly('REGISTER_IP_HOURLY_LIMIT', 10))
+                   hourly('REGISTER_IP_HOURLY_LIMIT', 10),
+                   hourly('WORKSPACE_WRITE_MINUTE_LIMIT', 60))
