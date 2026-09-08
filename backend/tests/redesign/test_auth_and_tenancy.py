@@ -1,7 +1,7 @@
 """Identity, session handling, CSRF and workspace scoping. Zero cross-workspace disclosure."""
 from app.db import User
 
-from conftest import HEADERS, PASSWORD, register, second_workspace
+from conftest import HEADERS, PASSWORD, register
 
 AMAZON = 'https://www.amazon.com/dp/B0ABCDEFGH'
 
@@ -56,23 +56,16 @@ def test_a_viewer_cannot_write(client, owner):
     assert client.get('/api/v1/products').status_code == 200
 
 
-def test_products_are_invisible_to_another_workspace(client, owner, settings):
+def test_products_are_invisible_to_another_workspace(client, owner, second_client, stranger):
+    """Both workspaces share one database; see test_tenant_isolation.py for full coverage."""
     created = client.post('/api/v1/xray', json={'input': AMAZON}, headers={**HEADERS, 'Idempotency-Key': 'k1'}).json()
     product_id = created['product_id']
-    with second_workspace(settings) as other:
-        register(other, email='other@example.com', name='Other workspace')
-        assert other.get('/api/v1/products').json()['products'] == []
-        assert other.get(f'/api/v1/products/{product_id}').status_code == 404
-        assert other.get(f'/api/v1/research-jobs/{created["id"]}').status_code == 404
-        assert other.post(f'/api/v1/products/{product_id}/confirm', json={'name': 'Stolen'}, headers=HEADERS).status_code == 404
-
-
-def test_a_second_workspace_cannot_reuse_an_idempotency_key_to_read_a_decision(client, owner, settings):
-    created = client.post('/api/v1/xray', json={'input': AMAZON}, headers={**HEADERS, 'Idempotency-Key': 'shared-key'}).json()
-    client.post(f'/api/v1/products/{created["product_id"]}/confirm', json={'name': 'Steamer'}, headers=HEADERS)
-    with second_workspace(settings) as other:
-        register(other, email='other@example.com', name='Other workspace')
-        assert other.get('/api/v1/decisions').json()['decisions'] == []
+    assert client.get(f'/api/v1/products/{product_id}').status_code == 200
+    assert second_client.get('/api/v1/products').json()['products'] == []
+    assert second_client.get(f'/api/v1/products/{product_id}').status_code == 404
+    assert second_client.get(f'/api/v1/research-jobs/{created["id"]}').status_code == 404
+    assert second_client.post(f'/api/v1/products/{product_id}/confirm', json={'name': 'Stolen'}, headers=HEADERS).status_code == 404
+    assert client.get(f'/api/v1/products/{product_id}').json()['name'].startswith('Amazon product')
 
 
 def test_audit_log_is_owner_only_and_records_the_login(client, owner):

@@ -1,9 +1,24 @@
-"""Fixtures for the redesign suite. Every test gets an isolated in-memory evidence store."""
+"""Fixtures for the redesign suite.
+
+Two things matter here (action plan T01):
+
+* **One database, several cookie jars.** Tenant scoping is only exercised if both
+  workspaces live in the same store. The earlier fixtures built a second app with its
+  own in-memory engine, so a foreign id returned 404 whether or not the query filtered
+  by workspace. `second_client` now shares the app under test and only separates the
+  session cookie.
+* **The same suite runs on PostgreSQL.** Set ``TEST_POSTGRES_URL`` and every test runs
+  against a disposable schema in that database instead of SQLite, so unique
+  constraints, transaction behaviour and JSONB storage are covered by the real engine.
+"""
+import os
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -12,17 +27,53 @@ from app.settings import Settings  # noqa: E402
 
 HEADERS = {'X-Requested-With': 'TrendSell'}
 PASSWORD = 'a-long-enough-password'
+POSTGRES_URL = os.getenv('TEST_POSTGRES_URL')
+requires_postgres = pytest.mark.skipif(not POSTGRES_URL, reason='TEST_POSTGRES_URL is not configured')
+
+
+def postgres_schema_url(base):
+    """A disposable schema in the test database, and a callable that drops it."""
+    schema = 'trendsell_test_' + uuid.uuid4().hex[:16]
+    admin = create_engine(base, isolation_level='AUTOCOMMIT')
+    with admin.connect() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+
+    def drop():
+        with admin.connect() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        admin.dispose()
+
+    separator = '&' if '?' in base else '?'
+    return f'{base}{separator}options=-csearch_path%3D{schema}', drop
 
 
 @pytest.fixture
-def settings():
-    return Settings(environment='test', database_url='sqlite://',
+def database_url(tmp_path):
+    """An empty database for one test: a PostgreSQL schema when configured, else SQLite."""
+    if not POSTGRES_URL:
+        yield 'sqlite://'
+        return
+    url, drop = postgres_schema_url(POSTGRES_URL)
+    try:
+        yield url
+    finally:
+        drop()
+
+
+@pytest.fixture
+def settings(database_url):
+    return Settings(environment='test', database_url=database_url,
                     origins=('http://localhost:3000',), allow_registration=True, research_daily_limit=20)
 
 
 @pytest.fixture
-def client(settings):
-    with TestClient(create_app(settings)) as client:
+def app(settings):
+    return create_app(settings)
+
+
+@pytest.fixture
+def client(app):
+    with TestClient(app) as client:
         yield client
 
 
@@ -37,6 +88,17 @@ def owner(client):
     return register(client)
 
 
-def second_workspace(settings):
-    """A second client against the same app, so tenant scoping is exercised end to end."""
-    return TestClient(create_app(settings))
+@pytest.fixture
+def second_client(client):
+    """A second signed-out client against the *same* app and database.
+
+    Only the cookie jar differs, so a 404 for a foreign record proves workspace
+    filtering rather than proving the record was never stored.
+    """
+    return TestClient(client.app)
+
+
+@pytest.fixture
+def stranger(second_client):
+    """A signed-in owner of a different workspace in the same database."""
+    return register(second_client, email='stranger@example.com', name='Other workspace')
