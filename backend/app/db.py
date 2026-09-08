@@ -59,9 +59,15 @@ class Audit(Base):
     created_at = Column(String, nullable=False, default=now)
 
 class RateBucket(Base):
+    """One counter for one key in one window.
+
+    `expires_at` exists so a finished window can be swept without parsing the key, and so
+    cleanup can never touch a window that is still counting (action plan P04).
+    """
     __tablename__ = 'rate_buckets'
     key = Column(String, primary_key=True)
     count = Column(Integer, nullable=False, default=0)
+    expires_at = Column(String, nullable=True, index=True)
 
 class Database:
     def __init__(self, url):

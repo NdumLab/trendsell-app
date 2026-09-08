@@ -1,10 +1,14 @@
 import hashlib
 import re
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from fastapi import HTTPException
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
-from .db import RateBucket
+from .db import RateBucket, Session
+
+#: Windows in this app are hourly or daily; a day plus a margin outlives all of them.
+DEFAULT_BUCKET_TTL = 26 * 3600
 
 # Password hashing moved to app/passwords.py, which carries its own algorithm and
 # parameters so they can be raised without locking anyone out (action plan P02).
@@ -17,18 +21,37 @@ def check_password(password, stored):
 def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
-def consume(db, key, limit):
+def window_end(seconds):
+    """When the current bucket stops counting, so cleanup knows what is finished."""
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
+def consume(db, key, limit, ttl_seconds=DEFAULT_BUCKET_TTL, message=None):
     # Atomic counter across API processes. A nested transaction handles first-use races.
     try:
         with db.begin_nested():
-            db.add(RateBucket(key=key, count=0))
+            db.add(RateBucket(key=key, count=0, expires_at=window_end(ttl_seconds)))
             db.flush()
     except IntegrityError:
         pass
     result = db.execute(update(RateBucket).where(RateBucket.key == key, RateBucket.count < limit).values(count=RateBucket.count + 1))
     if not result.rowcount:
-        raise HTTPException(429, 'Rate limit reached. Try again after this window.')
+        raise HTTPException(429, message or 'Rate limit reached. Try again after this window.')
     db.commit()
+
+
+def purge_expired(db, now=None):
+    """Remove finished rate windows and dead sessions (action plan P04).
+
+    Only rows whose own expiry has passed are removed, so an active window keeps counting
+    and a live session keeps working. Returns what was removed, for the operational log.
+    """
+    moment = now or datetime.now(timezone.utc).isoformat()
+    sessions = db.query(Session).filter(Session.expires_at <= moment).delete(synchronize_session=False)
+    buckets = db.query(RateBucket).filter(RateBucket.expires_at.isnot(None),
+                                          RateBucket.expires_at <= moment).delete(synchronize_session=False)
+    db.commit()
+    return {'sessions': sessions, 'rate_buckets': buckets}
 
 def resolve_input(value):
     """Parse identifiers only. Never fetch a user-controlled URL or follow redirects."""

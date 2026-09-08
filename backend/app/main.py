@@ -13,7 +13,8 @@ from sqlalchemy.exc import IntegrityError
 from . import migrate
 from .settings import Settings
 from .db import Database, Workspace, User, Session, Record, records, audit, now, uid
-from .security import dummy_verify, hash_password, verify_password, token_hash, consume, resolve_input
+from .security import dummy_verify, hash_password, verify_password, token_hash, consume, purge_expired, resolve_input
+from .limits import BodyLimit, MAX_BODY_BYTES
 from .economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate, economics_summary
 from .pagination import DEFAULT_LIMIT, MAX_LIMIT, paginate, searched
 
@@ -98,11 +99,17 @@ def create_app(settings=None):
                     p.update(status='partial', events=p['events']+[{'id':len(p['events'])+1,'step':'Investigation interrupted', 'status':'unavailable','detail':'The service restarted. Refresh the investigation to try again.', 'at':now()}])
                     job.payload = p
             db.commit()
+            # Expired sessions and finished rate windows accumulate otherwise; only rows
+            # whose own expiry has passed are removed (action plan P04).
+            purge_expired(db)
         yield
         database.engine.dispose()
 
     app = FastAPI(title='TrendSell Evidence API', version='2.0.0', lifespan=lifespan)
     app.state.database = database
+    # Outermost, so an oversized body is refused before anything reads it. Counting the
+    # bytes as they arrive is what a Content-Length check could not do (action plan P04).
+    app.add_middleware(BodyLimit, limit=MAX_BODY_BYTES)
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.origins), allow_credentials=True,
                        allow_methods=['GET','POST','PUT','DELETE'], allow_headers=['Content-Type','Idempotency-Key','X-Requested-With'])
 
@@ -112,8 +119,6 @@ def create_app(settings=None):
             origin = request.headers.get('origin')
             if (origin and origin not in settings.origins) or request.headers.get('x-requested-with') != 'TrendSell':
                 return JSONResponse({'detail':'Request origin or CSRF header rejected'}, status_code=403)
-            if int(request.headers.get('content-length','0') or 0) > 32768:
-                return JSONResponse({'detail':'Request is too large'}, status_code=413)
         response = await call_next(request)
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
@@ -278,7 +283,8 @@ def create_app(settings=None):
     @app.post('/api/v1/auth/register', status_code=201)
     def register(payload: Credentials, request: Request, response: Response, db=Depends(get_db)):
         if not settings.allow_registration: raise HTTPException(403, 'Registration is closed. Contact your workspace owner.')
-        consume(db, f'auth:{request.client.host}:{now()[:13]}', 20)
+        consume(db, f'register:{request.client.host}:{now()[:13]}', settings.register_ip_hourly_limit,
+                message='Too many workspaces created from this address. Try again later.')
         workspace = Workspace(name=payload.name)
         db.add(workspace)
         db.flush()
@@ -292,8 +298,15 @@ def create_app(settings=None):
 
     @app.post('/api/v1/auth/login')
     def login(payload: Credentials, request: Request, response: Response, db=Depends(get_db)):
-        consume(db, f'auth:{request.client.host}:{now()[:13]}', 20)
-        user = db.query(User).filter_by(email=payload.email.lower().strip()).first()
+        # Two independent limits (action plan P04). The address limit is generous because a
+        # shared network is one address; the account limit is what actually bounds guessing
+        # against one person, including from many addresses.
+        email = payload.email.lower().strip()
+        consume(db, f'login-ip:{request.client.host}:{now()[:13]}', settings.login_ip_hourly_limit,
+                message='Too many sign-in attempts from this address. Try again later.')
+        consume(db, f'login-account:{token_hash(email)}:{now()[:13]}', settings.login_account_hourly_limit,
+                message='Too many sign-in attempts for this account. Try again later.')
+        user = db.query(User).filter_by(email=email).first()
         if not user:
             dummy_verify(payload.password)   # equalise timing; the account may not exist
             raise HTTPException(401, 'Email or password is incorrect.')

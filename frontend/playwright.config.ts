@@ -55,7 +55,11 @@ export default defineConfig({
         DATABASE_URL: `sqlite:///${DATABASE}`,
         CORS_ORIGINS: `${ORIGIN},http://localhost:${WEB_PORT}`,
         ALLOW_REGISTRATION: 'true',
-        RESEARCH_DAILY_LIMIT: '50',
+        RESEARCH_DAILY_LIMIT: '200',
+        // Each browser test signs into its own throwaway workspace, which the shipped
+        // per-address limits would (correctly) stop. test_request_limits.py covers them.
+        REGISTER_IP_HOURLY_LIMIT: '500',
+        LOGIN_IP_HOURLY_LIMIT: '500',
       },
     },
     {

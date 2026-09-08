@@ -21,6 +21,8 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from tempfile import NamedTemporaryFile
+
 from sqlalchemy import create_engine, inspect
 
 from .db import Base
@@ -28,6 +30,7 @@ from .settings import Settings
 
 BACKEND = Path(__file__).resolve().parents[1]
 BASELINE = '0001_pilot_baseline'
+#:  adopts the baseline only; anything after it must be run, not stamped.
 
 
 def alembic_config(url):
@@ -49,14 +52,43 @@ def current_revision(engine):
         return MigrationContext.configure(connection).get_current_revision()
 
 
-def schema_report(engine):
-    """What the database physically has, against what the models declare."""
+def model_schema():
+    """Table and column names the ORM models declare, i.e. what head must produce."""
+    return {name: set(table.columns.keys()) for name, table in Base.metadata.tables.items()}
+
+
+def revision_schema(revision):
+    """Table and column names a given revision produces.
+
+    Built by migrating a scratch in-memory database to that revision, so it stays correct
+    without a second hand-written description to drift. `stamp` needs this: the installation
+    being adopted matches the *baseline*, not necessarily the current models.
+    """
+    with NamedTemporaryFile(suffix='.db') as scratch:
+        url = f'sqlite:///{scratch.name}'
+        upgrade(url, revision)
+        engine = create_engine(url)
+        try:
+            inspector = inspect(engine)
+            return {name: {column['name'] for column in inspector.get_columns(name)}
+                    for name in inspector.get_table_names() if name != 'alembic_version'}
+        finally:
+            engine.dispose()
+
+
+def schema_report(engine, expected_schema=None):
+    """What the database physically has, against what is expected of it.
+
+    `expected_schema` defaults to the ORM models — the right comparison for readiness.
+    `stamp` passes the baseline revision's schema instead.
+    """
     inspector = inspect(engine)
     present = set(inspector.get_table_names())
-    expected = set(Base.metadata.tables)
+    expectation = expected_schema or model_schema()
+    expected = set(expectation)
     missing_columns = {}
     for name in sorted(expected & present):
-        declared = set(Base.metadata.tables[name].columns.keys())
+        declared = expectation[name]
         actual = {column['name'] for column in inspector.get_columns(name)}
         if declared - actual:
             missing_columns[name] = sorted(declared - actual)
@@ -82,34 +114,36 @@ def check(url):
         engine.dispose()
 
 
-def stamp_engine(engine):
+def stamp_engine(engine, revision=BASELINE):
     """Adopt an existing schema on an open engine. Refuses anything but a match.
 
     An empty database must be migrated, not stamped; a database with a revision already
-    recorded is left alone; a schema missing tables or columns is a problem to fix, not to
-    paper over.
+    recorded is left alone; a schema missing what `revision` produces is a problem to fix,
+    not to paper over. Extra columns are tolerated, because a database further ahead than
+    the baseline still contains everything the baseline describes — the later revisions are
+    then run normally.
     """
-    report = schema_report(engine)
+    report = schema_report(engine, revision_schema(revision))
     existing = current_revision(engine)
     if existing is not None:
         raise SystemExit(f'Database already records revision {existing}. Run `upgrade` instead of `stamp`.')
     if report['is_empty']:
         raise SystemExit('Database is empty. Run `upgrade` to create the schema; stamping would skip it.')
     if not report['matches_models']:
-        raise SystemExit('Schema does not match the models, so it cannot be adopted as the baseline.\n'
+        raise SystemExit(f'Schema does not match revision {revision}, so it cannot be adopted.\n'
                          f'  missing tables: {report["missing_tables"] or "none"}\n'
                          f'  missing columns: {report["missing_columns"] or "none"}')
     config = alembic_config(str(engine.url))
     with engine.begin() as connection:
         config.attributes['connection'] = connection
-        command.stamp(config, BASELINE)
+        command.stamp(config, revision)
     return report
 
 
-def stamp_baseline(url):
+def stamp_baseline(url, revision=BASELINE):
     engine = create_engine(url)
     try:
-        return stamp_engine(engine)
+        return stamp_engine(engine, revision)
     finally:
         engine.dispose()
 
@@ -126,7 +160,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='TrendSell schema management')
     parser.add_argument('action', choices=['check', 'upgrade', 'stamp'])
     parser.add_argument('--url', help='Database URL. Defaults to the application settings.')
-    parser.add_argument('--revision', default='head')
+    parser.add_argument('--revision', default=None,
+                        help='upgrade target (default head), or the revision to stamp (default the baseline)')
     args = parser.parse_args(argv)
     url = args.url or Settings.from_env().database_url
 
@@ -137,11 +172,12 @@ def main(argv=None):
             print(f'{key}: {report[key]}')
         return 0 if report['up_to_date'] and report['matches_models'] else 1
     if args.action == 'upgrade':
-        upgrade(url, args.revision)
+        upgrade(url, args.revision or 'head')
         print(f'upgraded to {current_revision(create_engine(url))}')
         return 0
-    stamp_baseline(url)
-    print(f'stamped existing schema as {BASELINE}')
+    revision = args.revision or BASELINE
+    stamp_baseline(url, revision)
+    print(f'stamped existing schema as {revision}. Run `upgrade` to apply any later revisions.')
     return 0
 
 

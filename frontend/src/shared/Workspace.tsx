@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, ApiError, post } from '@/lib/api';
+import { api, ApiError, post, setUnauthorizedHandler } from '@/lib/api';
 import { THRESHOLD_VERSION } from '@/lib/economics';
 import { stored } from '@/lib/utils';
 import type { Assessment, Product, Quote, User, Watch } from '@/types';
@@ -21,6 +21,7 @@ interface Store {
   moreDecisions: boolean; loadMoreDecisions: ()=>void;
   loading: boolean; error: string | null; authOpen: boolean; setAuthOpen: (open: boolean)=>void;
   enterDemo: ()=>Promise<void>; exitDemo: ()=>void; refresh: ()=>Promise<void>; requireUser: ()=>boolean;
+  signOut: ()=>Promise<void>;
   addDemoProduct: (p: Product)=>void; confirm: (id:string,name:string)=>Promise<Product>;
   watch: (id:string,threshold?:number)=>Promise<void>; unwatch: (id:string)=>Promise<void>;
   saveDecision: (result:Assessment, product:Product, requestKey:string)=>Promise<Assessment>;
@@ -71,7 +72,56 @@ export function WorkspaceProvider({children}:{children:React.ReactNode}) {
   useEffect(()=>{if(demo) localStorage.setItem('trendsell-demo-v2-decisions',JSON.stringify(demoDecisions));},[demoDecisions,demo]);
   useEffect(()=>{if(demo) localStorage.setItem('trendsell-demo-v2-quotes',JSON.stringify(demoQuotes));},[demoQuotes,demo]);
   const refresh=async()=>{await client.invalidateQueries();};
-  const error=!demo ? [me,products,watches,decisions,quotes].map(q=>q.error).find(e=>e && (!(e instanceof ApiError) || e.status!==401))?.message || null : null;
+  const workspaceQueries=[products,watches,decisions,quotes];
+  const error=!demo ? [me,...workspaceQueries].map(q=>q.error).find(e=>e && (!(e instanceof ApiError) || e.status!==401))?.message || null : null;
+
+  /** Everything cached for a workspace, which must not survive the session that fetched it. */
+  const dropWorkspaceCaches=()=>client.removeQueries({predicate:q=>!['me','config'].includes(String(q.queryKey[0]))});
+  // A session that has expired, or was ended in another tab, must not leave records on
+  // screen. `me` itself is left cached so clearing it cannot loop (action plan P04).
+  const unauthorized=!demo && [me,...workspaceQueries].some(q=>q.error instanceof ApiError && q.error.status===401);
+  const clearedRef=useRef(false);
+  // Only a session that actually existed can expire. A first-time visitor is signed out,
+  // not interrupted, so the dialog is not forced open at them.
+  const hadSession=useRef(false);
+  useEffect(()=>{if(user) hadSession.current=true;},[user]);
+  useEffect(()=>{
+    if(demo){clearedRef.current=false;return;}
+    if(unauthorized&&!clearedRef.current){
+      clearedRef.current=true;
+      dropWorkspaceCaches();
+      if(hadSession.current) setAuthOpen(true);
+    } else if(!unauthorized&&user) clearedRef.current=false;
+  },[unauthorized,user,demo]);
+  // Switching workspace must not leave the previous one's pages in memory.
+  const lastWorkspace=useRef<string|null>(null);
+  useEffect(()=>{
+    const id=user?.workspace_id ?? null;
+    if(lastWorkspace.current!==null && lastWorkspace.current!==id) dropWorkspaceCaches();
+    lastWorkspace.current=id;
+  },[user?.workspace_id]);
+  // Any 401, from any screen, is the signal that the session ended — not just the ones
+  // this provider happens to be polling.
+  const sessionEnded=useRef<()=>void>(()=>{});
+  sessionEnded.current=()=>{
+    if(demo||clearedRef.current) return;
+    clearedRef.current=true;
+    client.setQueryData(['me'],null);
+    dropWorkspaceCaches();
+    if(hadSession.current) setAuthOpen(true);
+  };
+  useEffect(()=>{
+    setUnauthorizedHandler(()=>sessionEnded.current());
+    return()=>setUnauthorizedHandler(null);
+  },[]);
+  // Signing out in one tab ends the session for all of them; re-check on focus too.
+  useEffect(()=>{
+    const revalidate=()=>{if(!demo) void client.invalidateQueries({queryKey:['me']});};
+    const onStorage=(event:StorageEvent)=>{if(event.key==='trendsell-auth-event') revalidate();};
+    window.addEventListener('storage',onStorage);
+    window.addEventListener('focus',revalidate);
+    return()=>{window.removeEventListener('storage',onStorage);window.removeEventListener('focus',revalidate);};
+  },[demo]);
   const term=productSearch.trim().toLowerCase();
   const demoMatches=term?demoProducts.filter(p=>`${p.name} ${p.asin}`.toLowerCase().includes(term)):demoProducts;
   const livePages=products.data?.pages ?? [];
@@ -91,6 +141,20 @@ export function WorkspaceProvider({children}:{children:React.ReactNode}) {
     moreDecisions:!demo&&!!decisions.hasNextPage,loadMoreDecisions:()=>{void decisions.fetchNextPage();},
     loading:demo?demoProducts.length===0:me.isLoading||(enabled&&products.isLoading),error,authOpen,setAuthOpen,enterDemo,exitDemo,refresh,
     requireUser:()=>{if(demo||user)return true;setAuthOpen(true);return false;},
+    signOut:async()=>{
+      try{await post('/auth/logout',{});}
+      finally{
+        // Tell the other tabs, then drop every cached record before the dialog opens.
+        try{localStorage.setItem('trendsell-auth-event',String(Date.now()));}catch{/* private mode */}
+        // Signing out is deliberate, so the workspace is dropped but nothing is prompted.
+        hadSession.current=false;
+        // Order matters: writing `me` first notifies the live observer, which re-renders
+        // as signed out. `clear()` would instead remove the query the observer is attached
+        // to, and a later write would land on a different one nobody is watching.
+        client.setQueryData(['me'],null);
+        dropWorkspaceCaches();
+      }
+    },
     addDemoProduct:p=>setDemoProducts(prev=>[p,...prev.filter(x=>x.id!==p.id)]),
     confirm:async(id,name)=>{
       if(demo){const p={...demoProducts.find(p=>p.id===id)!,name,confirmed:true};setDemoProducts(prev=>prev.map(x=>x.id===id?p:x));return p;}

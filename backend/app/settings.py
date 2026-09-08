@@ -11,6 +11,12 @@ class Settings:
     origins: tuple[str, ...] = ('http://localhost:3000', 'http://127.0.0.1:3000')
     allow_registration: bool = True
     research_daily_limit: int = 20
+    # Authentication limits, per hour (action plan P04). The address limits are generous
+    # because a shared network is one address; the account limit is what actually bounds
+    # guessing against one person, including from many addresses.
+    login_ip_hourly_limit: int = 30
+    login_account_hourly_limit: int = 10
+    register_ip_hourly_limit: int = 10
 
     @classmethod
     def from_env(cls):
@@ -28,4 +34,15 @@ class Settings:
         limit = int(os.getenv('RESEARCH_DAILY_LIMIT', '20'))
         if limit < 1 or limit > 1000:
             raise ValueError('RESEARCH_DAILY_LIMIT must be between 1 and 1000')
-        return cls(env, url, origins, os.getenv('ALLOW_REGISTRATION', 'false' if env == 'production' else 'true') == 'true', limit)
+
+        def hourly(name, default):
+            value = int(os.getenv(name, str(default)))
+            if value < 1 or value > 100000:
+                raise ValueError(f'{name} must be between 1 and 100000')
+            return value
+
+        return cls(env, url, origins,
+                   os.getenv('ALLOW_REGISTRATION', 'false' if env == 'production' else 'true') == 'true', limit,
+                   hourly('LOGIN_IP_HOURLY_LIMIT', 30),
+                   hourly('LOGIN_ACCOUNT_HOURLY_LIMIT', 10),
+                   hourly('REGISTER_IP_HOURLY_LIMIT', 10))
