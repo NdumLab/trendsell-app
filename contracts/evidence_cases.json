@@ -1,0 +1,780 @@
+{
+  "method_version": "evidence-quality/1.0.0",
+  "evaluated_at": "2026-09-08T12:00:00+00:00",
+  "note": "Shared evidence-quality contract. backend/tests/redesign/test_evidence_contract.py and frontend/src/lib/evidence.contract.test.ts must both reproduce every case exactly. The browser only runs this method for the demo; a real workspace reads the reading from the server.",
+  "cases": [
+    {
+      "name": "no-records",
+      "records": [],
+      "compliance_resolved": false,
+      "expected": {
+        "confidence": 0,
+        "coverage": false,
+        "compliance_resolved": false,
+        "overall": 0,
+        "observation_ids": [],
+        "method_version": "evidence-quality/1.0.0",
+        "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
+        "components": [
+          {
+            "name": "Independent demand metrics",
+            "detail": "0 distinct demand metric(s) dated within 90 days",
+            "points": 0,
+            "max": 45
+          },
+          {
+            "name": "Distinct sources",
+            "detail": "0 distinct source(s)",
+            "points": 0,
+            "max": 30
+          },
+          {
+            "name": "Destination coverage",
+            "detail": "No Nigeria market evidence",
+            "points": 0,
+            "max": 15
+          },
+          {
+            "name": "Freshness",
+            "detail": "No evidence in window",
+            "points": 0,
+            "max": 10
+          }
+        ],
+        "raw_points": 0,
+        "capped_at": 60,
+        "records_in_window": 0,
+        "records_total": 0,
+        "limitations": [
+          "No evidence dated within the last 90 days.",
+          "No recognised demand metric has been recorded.",
+          "No Nigeria market evidence. Missing local listings are not low competition.",
+          "Import readiness has not been resolved by a reviewer."
+        ]
+      }
+    },
+    {
+      "name": "one-manual-demand-signal",
+      "records": [
+        {
+          "id": "a",
+          "metric": "Search interest",
+          "market": "US",
+          "source_name": "Search export",
+          "observed_at": "2026-09-05",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        }
+      ],
+      "compliance_resolved": false,
+      "expected": {
+        "confidence": 35,
+        "coverage": false,
+        "compliance_resolved": false,
+        "overall": 35,
+        "observation_ids": [
+          "a"
+        ],
+        "method_version": "evidence-quality/1.0.0",
+        "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
+        "components": [
+          {
+            "name": "Independent demand metrics",
+            "detail": "1 distinct demand metric(s) dated within 90 days",
+            "points": 15,
+            "max": 45
+          },
+          {
+            "name": "Distinct sources",
+            "detail": "1 distinct source(s)",
+            "points": 10,
+            "max": 30
+          },
+          {
+            "name": "Destination coverage",
+            "detail": "No Nigeria market evidence",
+            "points": 0,
+            "max": 15
+          },
+          {
+            "name": "Freshness",
+            "detail": "Newest record is 3 day(s) old",
+            "points": 10,
+            "max": 10
+          }
+        ],
+        "raw_points": 35,
+        "capped_at": 60,
+        "records_in_window": 1,
+        "records_total": 1,
+        "limitations": [
+          "All evidence is self-reported, so the score is capped at 60. Only a connected, authorised collector can raise it further.",
+          "No Nigeria market evidence. Missing local listings are not low competition.",
+          "Import readiness has not been resolved by a reviewer."
+        ]
+      }
+    },
+    {
+      "name": "manual-demand-and-destination",
+      "records": [
+        {
+          "id": "a",
+          "metric": "Search interest",
+          "market": "US",
+          "source_name": "Search export",
+          "observed_at": "2026-09-05",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "b",
+          "metric": "Local listing price",
+          "market": "NG",
+          "source_name": "Lagos survey",
+          "observed_at": "2026-08-30",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        }
+      ],
+      "compliance_resolved": false,
+      "expected": {
+        "confidence": 60,
+        "coverage": true,
+        "compliance_resolved": false,
+        "overall": 60,
+        "observation_ids": [
+          "a",
+          "b"
+        ],
+        "method_version": "evidence-quality/1.0.0",
+        "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
+        "components": [
+          {
+            "name": "Independent demand metrics",
+            "detail": "1 distinct demand metric(s) dated within 90 days",
+            "points": 15,
+            "max": 45
+          },
+          {
+            "name": "Distinct sources",
+            "detail": "2 distinct source(s)",
+            "points": 20,
+            "max": 30
+          },
+          {
+            "name": "Destination coverage",
+            "detail": "1 Nigeria market record(s)",
+            "points": 15,
+            "max": 15
+          },
+          {
+            "name": "Freshness",
+            "detail": "Newest record is 3 day(s) old",
+            "points": 10,
+            "max": 10
+          }
+        ],
+        "raw_points": 60,
+        "capped_at": 60,
+        "records_in_window": 2,
+        "records_total": 2,
+        "limitations": [
+          "All evidence is self-reported, so the score is capped at 60. Only a connected, authorised collector can raise it further.",
+          "Import readiness has not been resolved by a reviewer."
+        ]
+      }
+    },
+    {
+      "name": "manual-rich-but-capped",
+      "records": [
+        {
+          "id": "a",
+          "metric": "Search interest",
+          "market": "US",
+          "source_name": "Search export",
+          "observed_at": "2026-09-06",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "b",
+          "metric": "Review velocity",
+          "market": "US",
+          "source_name": "Marketplace listing",
+          "observed_at": "2026-09-03",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "c",
+          "metric": "Marketplace rank",
+          "market": "US",
+          "source_name": "Marketplace category",
+          "observed_at": "2026-09-02",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "d",
+          "metric": "Local listing price",
+          "market": "NG",
+          "source_name": "Lagos survey",
+          "observed_at": "2026-08-30",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "e",
+          "metric": "Local seller count",
+          "market": "NG",
+          "source_name": "Lagos survey",
+          "observed_at": "2026-08-30",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        }
+      ],
+      "compliance_resolved": false,
+      "expected": {
+        "confidence": 60,
+        "coverage": true,
+        "compliance_resolved": false,
+        "overall": 60,
+        "observation_ids": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e"
+        ],
+        "method_version": "evidence-quality/1.0.0",
+        "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
+        "components": [
+          {
+            "name": "Independent demand metrics",
+            "detail": "3 distinct demand metric(s) dated within 90 days",
+            "points": 45,
+            "max": 45
+          },
+          {
+            "name": "Distinct sources",
+            "detail": "4 distinct source(s)",
+            "points": 30,
+            "max": 30
+          },
+          {
+            "name": "Destination coverage",
+            "detail": "2 Nigeria market record(s)",
+            "points": 15,
+            "max": 15
+          },
+          {
+            "name": "Freshness",
+            "detail": "Newest record is 2 day(s) old",
+            "points": 10,
+            "max": 10
+          }
+        ],
+        "raw_points": 100,
+        "capped_at": 60,
+        "records_in_window": 5,
+        "records_total": 5,
+        "limitations": [
+          "All evidence is self-reported, so the score is capped at 60. Only a connected, authorised collector can raise it further.",
+          "Import readiness has not been resolved by a reviewer."
+        ]
+      }
+    },
+    {
+      "name": "manual-rich-with-approved-review",
+      "records": [
+        {
+          "id": "a",
+          "metric": "Search interest",
+          "market": "US",
+          "source_name": "Search export",
+          "observed_at": "2026-09-06",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "b",
+          "metric": "Review velocity",
+          "market": "US",
+          "source_name": "Marketplace listing",
+          "observed_at": "2026-09-03",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "c",
+          "metric": "Marketplace rank",
+          "market": "US",
+          "source_name": "Marketplace category",
+          "observed_at": "2026-09-02",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "d",
+          "metric": "Local listing price",
+          "market": "NG",
+          "source_name": "Lagos survey",
+          "observed_at": "2026-08-30",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        }
+      ],
+      "compliance_resolved": true,
+      "expected": {
+        "confidence": 60,
+        "coverage": true,
+        "compliance_resolved": true,
+        "overall": 60,
+        "observation_ids": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "method_version": "evidence-quality/1.0.0",
+        "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
+        "components": [
+          {
+            "name": "Independent demand metrics",
+            "detail": "3 distinct demand metric(s) dated within 90 days",
+            "points": 45,
+            "max": 45
+          },
+          {
+            "name": "Distinct sources",
+            "detail": "4 distinct source(s)",
+            "points": 30,
+            "max": 30
+          },
+          {
+            "name": "Destination coverage",
+            "detail": "1 Nigeria market record(s)",
+            "points": 15,
+            "max": 15
+          },
+          {
+            "name": "Freshness",
+            "detail": "Newest record is 2 day(s) old",
+            "points": 10,
+            "max": 10
+          }
+        ],
+        "raw_points": 100,
+        "capped_at": 60,
+        "records_in_window": 4,
+        "records_total": 4,
+        "limitations": [
+          "All evidence is self-reported, so the score is capped at 60. Only a connected, authorised collector can raise it further."
+        ]
+      }
+    },
+    {
+      "name": "collected-lifts-the-cap",
+      "records": [
+        {
+          "id": "a",
+          "metric": "Search interest",
+          "market": "US",
+          "source_name": "Search export",
+          "observed_at": "2026-09-06",
+          "truth_state": "Demo",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "b",
+          "metric": "Review velocity",
+          "market": "US",
+          "source_name": "Marketplace listing",
+          "observed_at": "2026-09-03",
+          "truth_state": "Demo",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "c",
+          "metric": "Marketplace rank",
+          "market": "US",
+          "source_name": "Marketplace category",
+          "observed_at": "2026-09-02",
+          "truth_state": "Demo",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "d",
+          "metric": "Local listing price",
+          "market": "NG",
+          "source_name": "Lagos survey",
+          "observed_at": "2026-08-30",
+          "truth_state": "Demo",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "e",
+          "metric": "Local seller count",
+          "market": "NG",
+          "source_name": "Lagos survey",
+          "observed_at": "2026-08-30",
+          "truth_state": "Demo",
+          "value": 1.0,
+          "unit": "unit"
+        }
+      ],
+      "compliance_resolved": true,
+      "expected": {
+        "confidence": 100,
+        "coverage": true,
+        "compliance_resolved": true,
+        "overall": 100,
+        "observation_ids": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e"
+        ],
+        "method_version": "evidence-quality/1.0.0",
+        "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
+        "components": [
+          {
+            "name": "Independent demand metrics",
+            "detail": "3 distinct demand metric(s) dated within 90 days",
+            "points": 45,
+            "max": 45
+          },
+          {
+            "name": "Distinct sources",
+            "detail": "4 distinct source(s)",
+            "points": 30,
+            "max": 30
+          },
+          {
+            "name": "Destination coverage",
+            "detail": "2 Nigeria market record(s)",
+            "points": 15,
+            "max": 15
+          },
+          {
+            "name": "Freshness",
+            "detail": "Newest record is 2 day(s) old",
+            "points": 10,
+            "max": 10
+          }
+        ],
+        "raw_points": 100,
+        "capped_at": null,
+        "records_in_window": 5,
+        "records_total": 5,
+        "limitations": []
+      }
+    },
+    {
+      "name": "stale-records-score-nothing",
+      "records": [
+        {
+          "id": "a",
+          "metric": "Search interest",
+          "market": "US",
+          "source_name": "Search export",
+          "observed_at": "2026-02-20",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "b",
+          "metric": "Local listing price",
+          "market": "NG",
+          "source_name": "Lagos survey",
+          "observed_at": "2026-04-11",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        }
+      ],
+      "compliance_resolved": false,
+      "expected": {
+        "confidence": 0,
+        "coverage": false,
+        "compliance_resolved": false,
+        "overall": 0,
+        "observation_ids": [],
+        "method_version": "evidence-quality/1.0.0",
+        "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
+        "components": [
+          {
+            "name": "Independent demand metrics",
+            "detail": "0 distinct demand metric(s) dated within 90 days",
+            "points": 0,
+            "max": 45
+          },
+          {
+            "name": "Distinct sources",
+            "detail": "0 distinct source(s)",
+            "points": 0,
+            "max": 30
+          },
+          {
+            "name": "Destination coverage",
+            "detail": "No Nigeria market evidence",
+            "points": 0,
+            "max": 15
+          },
+          {
+            "name": "Freshness",
+            "detail": "No evidence in window",
+            "points": 0,
+            "max": 10
+          }
+        ],
+        "raw_points": 0,
+        "capped_at": 60,
+        "records_in_window": 0,
+        "records_total": 2,
+        "limitations": [
+          "No evidence dated within the last 90 days.",
+          "No recognised demand metric has been recorded.",
+          "No Nigeria market evidence. Missing local listings are not low competition.",
+          "Import readiness has not been resolved by a reviewer."
+        ]
+      }
+    },
+    {
+      "name": "aging-into-the-lower-freshness-band",
+      "records": [
+        {
+          "id": "a",
+          "metric": "Search interest",
+          "market": "US",
+          "source_name": "Search export",
+          "observed_at": "2026-07-25",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "b",
+          "metric": "Local listing price",
+          "market": "NG",
+          "source_name": "Lagos survey",
+          "observed_at": "2026-07-10",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        }
+      ],
+      "compliance_resolved": false,
+      "expected": {
+        "confidence": 55,
+        "coverage": true,
+        "compliance_resolved": false,
+        "overall": 55,
+        "observation_ids": [
+          "a",
+          "b"
+        ],
+        "method_version": "evidence-quality/1.0.0",
+        "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
+        "components": [
+          {
+            "name": "Independent demand metrics",
+            "detail": "1 distinct demand metric(s) dated within 90 days",
+            "points": 15,
+            "max": 45
+          },
+          {
+            "name": "Distinct sources",
+            "detail": "2 distinct source(s)",
+            "points": 20,
+            "max": 30
+          },
+          {
+            "name": "Destination coverage",
+            "detail": "1 Nigeria market record(s)",
+            "points": 15,
+            "max": 15
+          },
+          {
+            "name": "Freshness",
+            "detail": "Newest record is 45 day(s) old",
+            "points": 5,
+            "max": 10
+          }
+        ],
+        "raw_points": 55,
+        "capped_at": 60,
+        "records_in_window": 2,
+        "records_total": 2,
+        "limitations": [
+          "All evidence is self-reported, so the score is capped at 60. Only a connected, authorised collector can raise it further.",
+          "Import readiness has not been resolved by a reviewer."
+        ]
+      }
+    },
+    {
+      "name": "unrecognised-metric-scores-nothing",
+      "records": [
+        {
+          "id": "a",
+          "metric": "Other",
+          "market": "NG",
+          "source_name": "A note",
+          "observed_at": "2026-09-05",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        }
+      ],
+      "compliance_resolved": false,
+      "expected": {
+        "confidence": 20,
+        "coverage": false,
+        "compliance_resolved": false,
+        "overall": 20,
+        "observation_ids": [
+          "a"
+        ],
+        "method_version": "evidence-quality/1.0.0",
+        "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
+        "components": [
+          {
+            "name": "Independent demand metrics",
+            "detail": "0 distinct demand metric(s) dated within 90 days",
+            "points": 0,
+            "max": 45
+          },
+          {
+            "name": "Distinct sources",
+            "detail": "1 distinct source(s)",
+            "points": 10,
+            "max": 30
+          },
+          {
+            "name": "Destination coverage",
+            "detail": "No Nigeria market evidence",
+            "points": 0,
+            "max": 15
+          },
+          {
+            "name": "Freshness",
+            "detail": "Newest record is 3 day(s) old",
+            "points": 10,
+            "max": 10
+          }
+        ],
+        "raw_points": 20,
+        "capped_at": 60,
+        "records_in_window": 1,
+        "records_total": 1,
+        "limitations": [
+          "All evidence is self-reported, so the score is capped at 60. Only a connected, authorised collector can raise it further.",
+          "No recognised demand metric has been recorded.",
+          "No Nigeria market evidence. Missing local listings are not low competition.",
+          "Import readiness has not been resolved by a reviewer."
+        ]
+      }
+    },
+    {
+      "name": "one-source-many-metrics",
+      "records": [
+        {
+          "id": "a",
+          "metric": "Search interest",
+          "market": "US",
+          "source_name": "Single source",
+          "observed_at": "2026-09-05",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "b",
+          "metric": "Review velocity",
+          "market": "US",
+          "source_name": "Single source",
+          "observed_at": "2026-09-05",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        },
+        {
+          "id": "c",
+          "metric": "Local listing count",
+          "market": "NG",
+          "source_name": "Single source",
+          "observed_at": "2026-09-05",
+          "truth_state": "User input",
+          "value": 1.0,
+          "unit": "unit"
+        }
+      ],
+      "compliance_resolved": false,
+      "expected": {
+        "confidence": 60,
+        "coverage": true,
+        "compliance_resolved": false,
+        "overall": 60,
+        "observation_ids": [
+          "a",
+          "b",
+          "c"
+        ],
+        "method_version": "evidence-quality/1.0.0",
+        "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
+        "components": [
+          {
+            "name": "Independent demand metrics",
+            "detail": "2 distinct demand metric(s) dated within 90 days",
+            "points": 30,
+            "max": 45
+          },
+          {
+            "name": "Distinct sources",
+            "detail": "1 distinct source(s)",
+            "points": 10,
+            "max": 30
+          },
+          {
+            "name": "Destination coverage",
+            "detail": "1 Nigeria market record(s)",
+            "points": 15,
+            "max": 15
+          },
+          {
+            "name": "Freshness",
+            "detail": "Newest record is 3 day(s) old",
+            "points": 10,
+            "max": 10
+          }
+        ],
+        "raw_points": 65,
+        "capped_at": 60,
+        "records_in_window": 3,
+        "records_total": 3,
+        "limitations": [
+          "All evidence is self-reported, so the score is capped at 60. Only a connected, authorised collector can raise it further.",
+          "Import readiness has not been resolved by a reviewer."
+        ]
+      }
+    }
+  ]
+}

@@ -18,6 +18,8 @@ from .security import dummy_verify, hash_password, verify_password, token_hash, 
 from .limits import BodyLimit, MAX_BODY_BYTES
 from .observability import Counters, REQUEST_ID, USER_ID, WORKSPACE_ID, logger, new_request_id, route_label
 from .permissions import matrix, require
+from .evidence import EvidenceRequest, MANUAL_TRUTH_STATE, METHOD_VERSION, METRICS, quality
+from . import compliance as cmp
 from .economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate, economics_summary
 from .pagination import DEFAULT_LIMIT, MAX_LIMIT, paginate, searched
 
@@ -177,6 +179,10 @@ def create_app(settings=None):
         WORKSPACE_ID.set(user.workspace_id)
         USER_ID.set(user.id)
         return user
+
+    def permissions_granted(user, permission):
+        from .permissions import granted
+        return granted(user.role, permission)
 
     def permitted(permission):
         """A dependency that asks for a named permission, never for a role (P05)."""
@@ -386,13 +392,145 @@ def create_app(settings=None):
 
     @app.get('/api/v1/products/{product_id}')
     def product(product_id: str, user=Depends(current_user), db=Depends(get_db)):
-        return with_latest_assessment(db,user,[owned(db,user,'product',product_id)])[0]
+        body = with_latest_assessment(db,user,[owned(db,user,'product',product_id)])[0]
+        reading, gate, _ = evidence_gate(db,user,product_id)
+        # Evidence status is derived from the records, never stored as an opinion (D03).
+        return {**body, 'confidence': reading['confidence'], 'evidence_quality': reading,
+                'compliance': gate, 'observations': evidence_records(db,user,product_id),
+                'decision': 'INSUFFICIENT EVIDENCE' if not reading['coverage'] else body['decision'],
+                'blocker': reading['limitations'][0] if reading['limitations'] else body.get('blocker')}
+
+    def evidence_records(db, user, product_id):
+        """Every evidence record for one product, oldest first."""
+        rows = (records(db,user,'evidence')
+                .filter(Record.payload['product_id'].as_string() == product_id)
+                .order_by(Record.created_at.asc()).all())
+        return [serialize(row) for row in rows]
+
+    def latest_review(db, user, product_id):
+        """The newest import-readiness review for one product, or None."""
+        rows = (records(db,user,'compliance_review')
+                .filter(Record.payload['product_id'].as_string() == product_id)
+                .order_by(Record.created_at.asc()).all())
+        return serialize(rows[-1]) if rows else None
+
+    def evidence_gate(db, user, product_id):
+        """The gate inputs, computed on the server from stored records (action plan D03).
+
+        Nothing a client sends can raise confidence, assert coverage, or resolve
+        compliance: each comes from records this workspace actually holds.
+        """
+        review = latest_review(db, user, product_id)
+        gate = cmp.gate_state(review)
+        reading = quality(evidence_records(db, user, product_id), gate['resolved'])
+        return reading, gate, review
 
     @app.get('/api/v1/products/{product_id}/evidence')
     @app.get('/api/v1/products/{product_id}/timeline')
     def evidence(product_id: str, user=Depends(current_user), db=Depends(get_db)):
         owned(db,user,'product',product_id)
-        return {'observations':[], 'truth_state':'Unavailable', 'reason':'No approved collector has produced an observation for this product.'}
+        stored = evidence_records(db,user,product_id)
+        reading, gate, _ = evidence_gate(db,user,product_id)
+        return {'observations': stored,
+                # No collector exists, so nothing here is an observed fact. The truth state
+                # says what the records actually are (action plan E06).
+                'truth_state': MANUAL_TRUTH_STATE if stored else 'Unavailable',
+                'reason': ('These records were entered by people in this workspace. No approved collector '
+                           'has produced an observation for this product.') if stored else
+                          'No evidence has been recorded and no approved collector has produced an observation.',
+                'quality': reading, 'compliance': gate, 'metrics': METRICS}
+
+    @app.post('/api/v1/products/{product_id}/evidence', status_code=201)
+    def record_evidence(product_id: str, payload: EvidenceRequest,
+                        user=Depends(permitted('evidence.submit')), db=Depends(get_db)):
+        """Record one dated observation a person made.
+
+        The truth state is set here, not by the caller: a typed number is user input, and
+        only a connected authorised collector could make it an observation (E06).
+        """
+        owned(db,user,'product',product_id)
+        consume(db, f'evidence:{user.workspace_id}:{now()[:16]}', settings.workspace_write_minute_limit,
+                message='This workspace is recording evidence too quickly. Try again in a moment.')
+        row = insert(db,user,'evidence', {**payload.model_dump(), 'product_id': product_id,
+                                          'truth_state': MANUAL_TRUTH_STATE, 'verification': 'Unverified',
+                                          'input_author': user.id, 'recorded_at': now(),
+                                          'method_version': METHOD_VERSION})
+        audit(db,user,'evidence.recorded',row.id,product_id=product_id,metric=payload.metric,
+              market=payload.market,observed_at=payload.observed_at)
+        db.commit()
+        return serialize(row)
+
+    @app.delete('/api/v1/products/{product_id}/evidence/{evidence_id}')
+    def withdraw_evidence(product_id: str, evidence_id: str,
+                          user=Depends(permitted('evidence.submit')), db=Depends(get_db)):
+        """Withdraw a record entered in error. Assessments that referenced it keep their
+        own snapshot, so history does not change."""
+        owned(db,user,'product',product_id)
+        row = owned(db,user,'evidence',evidence_id)
+        if row.payload.get('product_id') != product_id:
+            raise HTTPException(404, 'Record not found in this workspace.')
+        audit(db,user,'evidence.withdrawn',row.id,product_id=product_id,metric=row.payload.get('metric'))
+        db.delete(row)
+        db.commit()
+        return {'status':'withdrawn'}
+
+    # --- Import-readiness review (action plan N02, N03) ---------------------------
+
+    @app.get('/api/v1/products/{product_id}/compliance')
+    def compliance_state(product_id: str, user=Depends(current_user), db=Depends(get_db)):
+        owned(db,user,'product',product_id)
+        review = latest_review(db,user,product_id)
+        history = [serialize(row) for row in
+                   records(db,user,'compliance_review')
+                   .filter(Record.payload['product_id'].as_string() == product_id)
+                   .order_by(Record.created_at.desc()).all()]
+        return {'gate': cmp.gate_state(review), 'current': review, 'history': history,
+                'can_review': permissions_granted(user, 'compliance.review'),
+                'review_version': cmp.REVIEW_VERSION}
+
+    @app.post('/api/v1/products/{product_id}/compliance/requests', status_code=201)
+    def request_review(product_id: str, payload: cmp.ReviewRequest,
+                       user=Depends(permitted('workspace.write')), db=Depends(get_db)):
+        """Ask a reviewer to resolve import readiness, with the context they need."""
+        product = owned(db,user,'product',product_id)
+        if payload.product_id != product_id:
+            raise HTTPException(422, 'The request must name the product it is filed against.')
+        current = latest_review(db,user,product_id)
+        if current and current['status'] == 'requested':
+            raise HTTPException(409, 'A review is already waiting for this product.')
+        row = insert(db,user,'compliance_review', {
+            **payload.model_dump(), 'product_id': product_id, 'product_name': product.payload.get('name'),
+            'status': 'requested', 'requested_by': user.id, 'requested_at': now(),
+            'supersedes': current['id'] if current else None, 'superseded_by': None,
+            'review_version': cmp.REVIEW_VERSION})
+        if current:
+            current_row = owned(db,user,'compliance_review',current['id'])
+            current_row.payload = {**current_row.payload, 'superseded_by': row.id}
+        audit(db,user,'compliance.review_requested',row.id,product_id=product_id,
+              hs_code_candidate=payload.hs_code_candidate or None)
+        db.commit()
+        return serialize(row)
+
+    @app.post('/api/v1/compliance/reviews/{review_id}/decision')
+    def decide_review(review_id: str, payload: cmp.ReviewDecision,
+                      user=Depends(permitted('compliance.review')), db=Depends(get_db)):
+        """A reviewer's decision. Only this permission can resolve the compliance gate."""
+        row = owned(db,user,'compliance_review',review_id)
+        if row.payload['status'] != 'requested':
+            raise HTTPException(409, 'This review has already been decided. Request a new review instead.')
+        if payload.status == 'approved' and not payload.sources:
+            raise HTTPException(422, 'An approval must cite the official sources it rests on.')
+        decided = {**row.payload, 'status': payload.status, 'rationale': payload.rationale,
+                   'hs_code': payload.hs_code, 'requirements': payload.requirements,
+                   'sources': [source.model_dump() for source in payload.sources],
+                   'reviewer_id': user.id, 'decided_at': now(),
+                   'expires_at': cmp.expiry(payload.validity_days) if payload.status == 'approved' else None}
+        row.payload = decided
+        audit(db,user,'compliance.reviewed',row.id,product_id=row.payload['product_id'],
+              status=payload.status,hs_code=payload.hs_code or None,sources=len(payload.sources))
+        db.commit()
+        return serialize(row)
+
 
     def run_job(job_id, workspace_id):
         with database.session() as db:
@@ -472,11 +610,17 @@ def create_app(settings=None):
         old=records(db,user,'decision').filter_by(key=idempotency_key).first()
         if old:
             return same_submission(old)
-        result=calculate(payload.inputs)
+        # The gate inputs are computed here, from records this workspace holds. A client
+        # cannot raise confidence, assert coverage or resolve compliance (action plan D03).
+        reading, gate, review = evidence_gate(db,user,payload.product_id)
+        snapshot = evidence_records(db,user,payload.product_id)
+        result=calculate(payload.inputs, reading)
         # The assessment carries its own evidence snapshot and versions, so an export never
         # has to reconstruct provenance from whatever product a screen has open (T03).
         result.update(product_id=product.id,product_name=product.payload['name'],product_asin=product.payload.get('asin'),
-                      input_author=user.id,evidence=[],evidence_version='no-observations/1',
+                      input_author=user.id,evidence=snapshot,evidence_version=reading['method_version'],
+                      evidence_quality=reading,compliance=gate,
+                      compliance_review_id=review['id'] if review else None,
                       threshold_version=THRESHOLD_VERSION,formula_version=FORMULA_VERSION,
                       economics=economics_summary(result['scenarios']))
         row,created=insert_unique(db,user,'decision',idempotency_key,result)
