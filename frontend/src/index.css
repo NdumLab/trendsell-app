@@ -247,3 +247,22 @@
 .target-note{margin-top:16px;padding:15px;border:1px solid var(--border);border-radius:8px;background:linear-gradient(115deg,var(--lime-soft),var(--input) 70%)}
 .target-note h4{font-size:11px;margin-bottom:8px}
 .target-note p{font-size:10px;line-height:1.9;color:var(--muted)}
+
+/* Evidence status and the user's latest saved assessment are separate facts (T07). */
+.assessment-summary{display:flex;flex-direction:column;gap:5px;align-items:flex-start}
+.assessment-summary small{font-size:8px;color:var(--muted);line-height:1.5}
+.assessment-summary.compact small{font-size:7px}
+.assessment-summary.none{color:var(--muted-low)}
+.assessment-summary .muted-text{font-size:9px}
+.evidence-status,.card-assessment{display:flex;flex-direction:column;gap:5px}
+.evidence-status>small,.card-assessment>small{font-size:7px;color:var(--muted-low);letter-spacing:.2px}
+.card-assessment{margin-top:12px;padding-top:11px;border-top:1px solid var(--border-soft)}
+.watch-verdicts{display:flex;gap:20px;flex-wrap:wrap}
+.watch-verdicts>span{display:flex;flex-direction:column;gap:5px}
+.watch-verdicts>span>small{font-size:7px;color:var(--muted-low);letter-spacing:.2px}
+/* Draft and saved exports are distinct actions (T03). */
+.export-actions{display:flex;align-items:center;gap:14px;flex-shrink:0;flex-wrap:wrap}
+/* Paging controls for server-side lists (T05). */
+.page-more{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:20px;flex-wrap:wrap}
+.page-more .muted-text{font-size:9px}
+@media (max-width:900px){.watch-verdicts,.export-actions{gap:12px}}

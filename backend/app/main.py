@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from .settings import Settings
 from .db import Database, Workspace, User, Session, Record, records, audit, now, uid
 from .security import hash_password, check_password, token_hash, consume, resolve_input
-from .economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate
+from .economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate, economics_summary
 from .pagination import DEFAULT_LIMIT, MAX_LIMIT, paginate, searched
 
 SOURCES = [
@@ -149,19 +149,60 @@ def create_app(settings=None):
     def serialize(row):
         return {**row.payload, 'id':row.id, 'created_at':row.created_at}
 
-    def with_product_names(db, user, rows):
+    def assessment_summary(row):
+        """What a product view needs to show about a saved assessment, without its detail."""
+        payload = row.payload
+        return {'id': row.id, 'decision': payload['decision'], 'saved_at': row.created_at,
+                'compliance': payload['inputs']['compliance'], 'channel': payload['inputs']['channel'],
+                'shipping': payload['inputs']['shipping'], 'truth_state': payload['truth_state'],
+                'formula_version': payload['formula_version'], 'threshold_version': payload.get('threshold_version'),
+                'economics': payload.get('economics') or economics_summary(payload['scenarios'])}
+
+    def with_latest_assessment(db, user, rows):
+        """Attach each product's most recent saved assessment (action plan T07).
+
+        Review finding 7: saving a prohibited assessment returned NO-GO while the product
+        still reported INSUFFICIENT EVIDENCE, and Discover and the watchlist read that
+        unchanged product verdict. The two are different facts, so the product carries
+        both: `decision` remains its *evidence* status, and `latest_assessment` is the
+        user's most recent *commercial* judgement, with its date and scenario. Neither
+        overwrites the other, and no saved assessment is modified.
+        """
+        serialized = [serialize(row) for row in rows]
+        ids = {item['id'] for item in serialized}
+        if not ids:
+            return serialized
+        latest = {}
+        for decision in (records(db,user,'decision')
+                         .filter(Record.payload['product_id'].as_string().in_(ids))
+                         .order_by(Record.created_at.asc()).all()):
+            latest[decision.payload['product_id']] = decision   # ascending, so the last write wins
+        for item in serialized:
+            row = latest.get(item['id'])
+            item['latest_assessment'] = assessment_summary(row) if row else None
+        return serialized
+
+    def with_product_names(db, user, rows, assessments=False):
         """Attach each record's current product name in one extra query.
 
         Watch and quote lists are paged independently of products, so a screen cannot
         look the name up in whatever product page happens to be loaded (action plan T05).
+        With `assessments`, the product's evidence status and latest saved assessment come
+        too, so the watchlist can show both rather than only the product verdict (T07).
         """
         serialized = [serialize(row) for row in rows]
         ids = {item['product_id'] for item in serialized if item.get('product_id')}
         if not ids:
             return serialized
-        names = {row.id: row.payload.get('name') for row in records(db,user,'product').filter(Record.id.in_(ids)).all()}
+        products = records(db,user,'product').filter(Record.id.in_(ids)).all()
+        detail = {p['id']: p for p in (with_latest_assessment(db,user,products) if assessments
+                                       else [serialize(p) for p in products])}
         for item in serialized:
-            item['product_name'] = names.get(item.get('product_id'))
+            product = detail.get(item.get('product_id'))
+            item['product_name'] = product['name'] if product else None
+            if assessments and product:
+                item['product_decision'] = product['decision']
+                item['latest_assessment'] = product['latest_assessment']
         return serialized
 
     def insert(db, user, kind, payload, key=None):
@@ -256,11 +297,11 @@ def create_app(settings=None):
     def products(search: str = Query(default='', max_length=200), limit: int = DEFAULT_LIMIT,
                  cursor: str | None = None, user=Depends(current_user), db=Depends(get_db)):
         rows, page = paginate(searched(records(db,user,'product'), search, ['name','asin']), limit, cursor)
-        return {'products':[serialize(r) for r in rows], **page}
+        return {'products':with_latest_assessment(db,user,rows), **page}
 
     @app.get('/api/v1/products/{product_id}')
     def product(product_id: str, user=Depends(current_user), db=Depends(get_db)):
-        return serialize(owned(db,user,'product',product_id))
+        return with_latest_assessment(db,user,[owned(db,user,'product',product_id)])[0]
 
     @app.get('/api/v1/products/{product_id}/evidence')
     @app.get('/api/v1/products/{product_id}/timeline')
@@ -351,7 +392,8 @@ def create_app(settings=None):
         # has to reconstruct provenance from whatever product a screen has open (T03).
         result.update(product_id=product.id,product_name=product.payload['name'],product_asin=product.payload.get('asin'),
                       input_author=user.id,evidence=[],evidence_version='no-observations/1',
-                      threshold_version=THRESHOLD_VERSION,formula_version=FORMULA_VERSION)
+                      threshold_version=THRESHOLD_VERSION,formula_version=FORMULA_VERSION,
+                      economics=economics_summary(result['scenarios']))
         row,created=insert_unique(db,user,'decision',idempotency_key,result)
         db.commit()
         # A retry after an ambiguous timeout reuses its key and must not save twice.
@@ -372,7 +414,7 @@ def create_app(settings=None):
     @app.get('/api/v1/watchlists/default/items')
     def watches(limit: int = DEFAULT_LIMIT, cursor: str | None = None, user=Depends(current_user), db=Depends(get_db)):
         rows, page = paginate(records(db,user,'watch'), limit, cursor)
-        return {'items':with_product_names(db,user,rows), **page}
+        return {'items':with_product_names(db,user,rows,assessments=True), **page}
 
     @app.post('/api/v1/watchlists/default/items')
     def watch(payload:WatchRequest,user=Depends(writer),db=Depends(get_db)):

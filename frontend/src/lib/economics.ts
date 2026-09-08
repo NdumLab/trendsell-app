@@ -93,6 +93,23 @@ export function calculate(i: Inputs, evidence: EvidenceGate = NO_EVIDENCE, formu
   return {formula_version:formulaVersion,truth_state:'Calculated',currency:'NGN',market:'NG',decision,confidence:evidence.confidence,observation_ids:evidence.observation_ids,blockers,scenarios,inputs:i,input_truth_state:'User input'};
 }
 
+export interface EconomicsSummary { base_margin_pct: number; downside_margin_pct: number; contribution: number; break_even_units: number | null; viable: boolean; failures: string[]; threshold_version: string }
+/** Whether the scenario pays for itself, judged without reference to evidence.
+ *  Kept out of `calculate()` on purpose: that output is pinned by `formula_version` and a
+ *  replayed historical assessment must reproduce byte for byte. This is a separate reading
+ *  of the same scenarios so a screen can say "the economics fail under these assumptions"
+ *  *and* "demand is unverified" instead of collapsing both into one verdict (T07).
+ *  Mirrors economics_summary() in backend/app/economics.py. */
+export function economicsSummary(scenarios: ScenarioRow[]): EconomicsSummary {
+  const base = scenarios[1], downside = scenarios[0], failures: string[] = [];
+  if (base.contribution <= 0) failures.push('The unit does not cover its own costs under these assumptions.');
+  if (base.margin_pct < 15) failures.push('Base contribution margin is below the 15% floor.');
+  else if (base.margin_pct < 25) failures.push('Base contribution margin is below the 25% target.');
+  if (downside.margin_pct < 10) failures.push('Downside contribution margin is below 10%.');
+  return { base_margin_pct: base.margin_pct, downside_margin_pct: downside.margin_pct, contribution: base.contribution,
+    break_even_units: base.break_even_units, viable: !failures.length, failures, threshold_version: THRESHOLD_VERSION };
+}
+
 export type NumericKey = Exclude<keyof Inputs,'compliance'|'channel'|'shipping'>;
 const SENSITIVITY_KEYS: NumericKey[] = ['unit_cost_usd','fx_ngn','freight_ngn','duty_pct','import_tax_pct','selling_price_ngn','channel_fee_pct','returns_pct','marketing_ngn','fixed_cost_ngn','quantity'];
 export interface Swing { key: NumericKey; low: number; high: number; swing: number }

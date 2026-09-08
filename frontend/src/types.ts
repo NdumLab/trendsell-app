@@ -6,10 +6,18 @@ export interface Observation {
   snapshot_id: string; collector_version: string; parser_version: string; usage_rights: string;
   series?: { date: string; value: number | null }[];
 }
+/** A product's evidence status and the user's latest saved assessment are different facts
+ *  and are stored, returned and displayed separately (action plan T07). */
+export interface LatestAssessment {
+  id: string; decision: Decision; saved_at: string; compliance: Inputs['compliance'];
+  channel: string; shipping: Inputs['shipping']; truth_state: Truth;
+  formula_version: string; threshold_version?: string | null;
+  economics: { base_margin_pct: number; downside_margin_pct: number; contribution: number; break_even_units: number | null; viable: boolean; failures: string[]; threshold_version: string };
+}
 export interface Product {
   id: string; name: string; category: string; asin: string; source_url: string; market: string;
   confirmed: boolean; truth_state: Truth; decision: Decision; confidence: number; stage: string;
-  blocker: string; observations: Observation[]; created_at: string;
+  blocker: string; observations: Observation[]; created_at: string; latest_assessment?: LatestAssessment | null;
   illustration?: 'steamer' | 'lamp' | 'blender'; signals?: string[];
 }
 export interface User { id: string; name: string; email: string; workspace_id: string; role: 'owner' | 'analyst' | 'viewer' }
@@ -37,5 +45,5 @@ export interface Assessment {
   observation_ids: string[]; evidence?: Observation[]; blockers: string[]; scenarios: Scenario[];
   inputs: Inputs; input_truth_state: Truth;
 }
-export interface Watch { id: string; product_id: string; product_name?: string | null; threshold_pct: number; status: string; scheduled: boolean; created_at: string }
+export interface Watch { id: string; product_id: string; product_name?: string | null; product_decision?: Decision; latest_assessment?: LatestAssessment | null; threshold_pct: number; status: string; scheduled: boolean; created_at: string }
 export interface Quote { id: string; product_id: string; product_name?: string | null; supplier: string; source_url: string; unit_price_usd: number; moq: number; lead_days: number; quote_date: string; incoterm: string; notes: string; truth_state: Truth; verification: string }

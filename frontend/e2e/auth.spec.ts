@@ -51,7 +51,7 @@ test.describe('account access', () => {
     await page.reload();
 
     await expect(page.getByRole('button', { name: /My workspace/ })).toBeVisible();
-    await expect(page.getByRole('article')).toHaveCount(0);
+    await expect(page.locator('.product-card')).toHaveCount(0);
     expect(workspace.email).toContain('@');
   });
 });

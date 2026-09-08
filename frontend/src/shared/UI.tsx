@@ -5,10 +5,23 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { dateTime, relativeTime } from '@/lib/utils';
 import { useWorkspace } from './Workspace';
-import type { Decision, Observation, Product, Truth } from '@/types';
+import type { Decision, LatestAssessment, Observation, Product, Truth } from '@/types';
 
 export function TruthBadge({truth}:{truth:Truth}) {return <span className={`truth truth-${truth.toLowerCase().replaceAll(' ','-')}`}><span/>{truth}</span>;}
 export function DecisionBadge({decision}:{decision:Decision}) {return <span className={`decision decision-${decision.toLowerCase().replaceAll(' ','-')}`}><span/>{decision==='INSUFFICIENT EVIDENCE'?'Needs evidence':decision}</span>;}
+/** The user's latest saved commercial assessment, shown beside — never instead of — the
+ *  product's evidence status (action plan T07). Its date and scenario are part of the fact:
+ *  a NO-GO saved in July under a different channel is not today's verdict. */
+export function AssessmentSummary({assessment,compact=false}:{assessment?:LatestAssessment|null;compact?:boolean}){
+ if(!assessment) return <span className="assessment-summary none"><span className="muted-text">No saved assessment</span></span>;
+ const {economics}=assessment;
+ return <span className={`assessment-summary ${compact?'compact':''}`}>
+  <DecisionBadge decision={assessment.decision}/>
+  <small title={dateTime(assessment.saved_at)}>Saved {relativeTime(assessment.saved_at)} · {assessment.channel} · {assessment.shipping}</small>
+  {!compact&&<small className={economics.viable?'text-lime':'text-amber'}>{economics.viable?'Economics pass at these assumptions':`Economics fail: ${economics.failures[0]}`}</small>}
+  {assessment.compliance==='prohibited'&&<small className="text-rose">Marked prohibited by the person who saved it</small>}
+ </span>;
+}
 export function PageTitle({eyebrow,title,description,actions}:{eyebrow?:string;title:string;description:string;actions?:React.ReactNode}) {return <div className="page-title"><div>{eyebrow&&<div className="eyebrow">{eyebrow}</div>}<h1>{title}</h1><p>{description}</p></div>{actions&&<div className="page-actions">{actions}</div>}</div>;}
 export function Empty({title,children,action}:{title:string;children:React.ReactNode;action?:React.ReactNode}) {return <div className="empty-state"><div className="empty-icon"><FileSearch size={27}/></div><h3>{title}</h3><p>{children}</p>{action}</div>;}
 export function Loading(){return <div className="loading" role="status"><LoaderCircle className="spin" size={22}/> Loading your workspace…</div>;}
@@ -59,5 +72,5 @@ export function ProductArt({kind='steamer',small=false}:{kind?:Product['illustra
 }
 export function ProductCard({product,onEvidence}:{product:Product;onEvidence:(observation:Observation)=>void}){
  const workspace=useWorkspace();const [busy,setBusy]=useState(false);const watched=workspace.watches.some(w=>w.product_id===product.id);
- return <article className="product-card"><div className="product-card-top"><span className="category-label">{product.category}</span><TruthBadge truth={product.truth_state}/></div><Link to={`/products/${product.id}`} tabIndex={-1} aria-hidden="true"><ProductArt kind={product.illustration}/></Link><div className="product-card-body"><div className="stage"><span/>{product.stage}</div><Link className="product-name" to={`/products/${product.id}`}>{product.name}<ArrowUpRight size={17}/></Link><div className="card-decision"><DecisionBadge decision={product.decision}/><button className="confidence" onClick={()=>product.observations[0]?onEvidence(product.observations[0]):toast.info('No observations collected. Confidence is suppressed.')}>{product.confidence}<span>/100 confidence</span></button></div><div className="signal-list">{(product.signals||['Product identifier captured','Source verification is pending']).map(s=><div key={s}><Check size={13}/>{s}</div>)}</div><div className="risk"><Info size={14}/><span>{product.blocker}</span></div><div className="card-footer"><span title={dateTime(product.created_at)}>{product.truth_state==='Demo'?'Example · ':''}{relativeTime(product.created_at)}</span><button className="text-button" disabled={busy||watched} onClick={async()=>{setBusy(true);try{await workspace.watch(product.id);toast.success('Added to watchlist');}catch(e){toast.error((e as Error).message);}finally{setBusy(false);}}}>{watched?'Watching':'Watch'}<ChevronRight size={14}/></button></div></div></article>;
+ return <article className="product-card"><div className="product-card-top"><span className="category-label">{product.category}</span><TruthBadge truth={product.truth_state}/></div><Link to={`/products/${product.id}`} tabIndex={-1} aria-hidden="true"><ProductArt kind={product.illustration}/></Link><div className="product-card-body"><div className="stage"><span/>{product.stage}</div><Link className="product-name" to={`/products/${product.id}`}>{product.name}<ArrowUpRight size={17}/></Link><div className="card-decision"><span className="evidence-status"><small>Evidence</small><DecisionBadge decision={product.decision}/></span><button className="confidence" onClick={()=>product.observations[0]?onEvidence(product.observations[0]):toast.info('No observations collected. Confidence is suppressed.')}>{product.confidence}<span>/100 confidence</span></button></div><div className="card-assessment"><small>Your latest assessment</small><AssessmentSummary assessment={product.latest_assessment} compact/></div><div className="signal-list">{(product.signals||['Product identifier captured','Source verification is pending']).map(s=><div key={s}><Check size={13}/>{s}</div>)}</div><div className="risk"><Info size={14}/><span>{product.blocker}</span></div><div className="card-footer"><span title={dateTime(product.created_at)}>{product.truth_state==='Demo'?'Example · ':''}{relativeTime(product.created_at)}</span><button className="text-button" disabled={busy||watched} onClick={async()=>{setBusy(true);try{await workspace.watch(product.id);toast.success('Added to watchlist');}catch(e){toast.error((e as Error).message);}finally{setBusy(false);}}}>{watched?'Watching':'Watch'}<ChevronRight size={14}/></button></div></div></article>;
 }

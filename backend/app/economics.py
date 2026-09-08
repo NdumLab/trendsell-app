@@ -149,6 +149,30 @@ def gates(scenarios, inputs, evidence):
     return decision, blockers
 
 
+def economics_summary(scenarios):
+    """Whether the scenario pays for itself, judged without reference to evidence.
+
+    Kept out of `calculate()` on purpose: that function's output is pinned by
+    `formula_version`, and a replayed historical assessment must reproduce byte for byte.
+    This is a separate reading of the same scenarios so a screen can say "the economics
+    fail under these assumptions" *and* "demand is unverified" instead of collapsing both
+    into one verdict (action plan T07).
+    """
+    base, downside = scenarios[1], scenarios[0]
+    failures = []
+    if base['contribution'] <= 0:
+        failures.append('The unit does not cover its own costs under these assumptions.')
+    if base['margin_pct'] < 15:
+        failures.append('Base contribution margin is below the 15% floor.')
+    elif base['margin_pct'] < 25:
+        failures.append('Base contribution margin is below the 25% target.')
+    if downside['margin_pct'] < 10:
+        failures.append('Downside contribution margin is below 10%.')
+    return {'base_margin_pct': base['margin_pct'], 'downside_margin_pct': downside['margin_pct'],
+            'contribution': base['contribution'], 'break_even_units': base['break_even_units'],
+            'viable': not failures, 'failures': failures, 'threshold_version': THRESHOLD_VERSION}
+
+
 def calculate(inputs: Inputs, evidence=None, formula_version: str = FORMULA_VERSION):
     """Scenarios and gates for `inputs`.
 
