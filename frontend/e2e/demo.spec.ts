@@ -1,4 +1,4 @@
-import { downloadJson, expect, test } from './fixtures';
+import { downloadJson, enterDemo, expect, test } from './fixtures';
 
 /** Demo records stay separate from a real workspace, in storage and in downloads (T02/T03). */
 test.describe('demo workspace', () => {
@@ -22,8 +22,7 @@ test.describe('demo workspace', () => {
   });
 
   test('a demo assessment is labelled demo in the app and in its download', async ({ page }) => {
-    await page.goto('/');
-    await page.getByRole('button', { name: /Explore demo/ }).click();
+    await enterDemo(page);
     await page.goto('/decisions');
     await expect(page.getByLabel('Choose product')).toBeVisible();
     await page.getByRole('button', { name: 'Save this decision' }).click();

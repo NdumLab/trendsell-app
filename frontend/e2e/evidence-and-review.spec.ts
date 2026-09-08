@@ -1,4 +1,4 @@
-import { asin, captureAndConfirm, expect, fillDecisionInputs, test } from './fixtures';
+import { asin, captureAndConfirm, enterDemo, expect, fillDecisionInputs, test } from './fixtures';
 
 /** Recording evidence and requesting an import-readiness review (E06, N02, N03, D03).
  *
@@ -112,8 +112,7 @@ test.describe('evidence and import readiness', () => {
   });
 
   test('the demo GO example passes the same gates on clearly synthetic evidence', async ({ page }) => {
-    await page.goto('/');
-    await page.getByRole('button', { name: /Explore demo/ }).click();
+    await enterDemo(page);
     await page.goto('/decisions');
     await page.getByLabel('Choose product').selectOption({ label: 'Portable garment steamer' });
 

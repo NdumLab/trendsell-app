@@ -28,6 +28,19 @@ export async function signIn(page: Page, workspace = 'E2E workspace') {
   return { email, workspace };
 }
 
+/** Enter the demo workspace and wait until it is actually active.
+ *
+ *  `enterDemo` loads its fixtures through a dynamic import and only marks the mode in
+ *  sessionStorage once that resolves, so a navigation issued straight after the click can
+ *  outrun it and land back in the pilot workspace. Waiting for the banner ties the next
+ *  navigation to the state it depends on instead of to the module graph being warm.
+ */
+export async function enterDemo(page: Page) {
+  await page.goto('/');
+  await page.getByRole('button', { name: /Explore demo/ }).click();
+  await expect(page.getByText('DEMO WORKSPACE', { exact: true })).toBeVisible();
+}
+
 /** Capture a product and confirm its identity, which a saved decision requires. */
 export async function captureAndConfirm(page: Page, identifier: string, name: string) {
   await page.goto('/xray');
