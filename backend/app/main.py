@@ -4,7 +4,7 @@ import hashlib
 import json
 import secrets
 from typing import Literal
-from fastapi import FastAPI, Depends, HTTPException, Request, Response, BackgroundTasks, Header
+from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response, BackgroundTasks, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict
@@ -14,6 +14,7 @@ from .settings import Settings
 from .db import Database, Workspace, User, Session, Record, records, audit, now, uid
 from .security import hash_password, check_password, token_hash, consume, resolve_input
 from .economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate
+from .pagination import DEFAULT_LIMIT, MAX_LIMIT, paginate, searched
 
 SOURCES = [
     {'id':'amazon', 'name':'Amazon catalog', 'category':'Product identity', 'markets':['US'], 'reason':'An authorized catalog connection is required. Pasted identifiers are user input, not verified catalog data.', 'rights':'Authorization required'},
@@ -22,6 +23,9 @@ SOURCES = [
     {'id':'compliance', 'name':'Import requirements', 'category':'Compliance & tariffs', 'markets':['NG'], 'reason':'Product classification and effective-dated regulator evidence require review.', 'rights':'Official publications with analyst review'},
     {'id':'freight', 'name':'Freight & currency', 'category':'Landed cost', 'markets':['CN','NG'], 'reason':'Enter dated freight quotes and your exchange-rate assumption in Decision Room.', 'rights':'User-provided inputs only'},
 ]
+
+EXPORT_KINDS = [('product','products'), ('job','research_jobs'), ('decision','decisions'),
+                ('quote','quotes'), ('watch','watches')]
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
@@ -126,6 +130,21 @@ def create_app(settings=None):
     def serialize(row):
         return {**row.payload, 'id':row.id, 'created_at':row.created_at}
 
+    def with_product_names(db, user, rows):
+        """Attach each record's current product name in one extra query.
+
+        Watch and quote lists are paged independently of products, so a screen cannot
+        look the name up in whatever product page happens to be loaded (action plan T05).
+        """
+        serialized = [serialize(row) for row in rows]
+        ids = {item['product_id'] for item in serialized if item.get('product_id')}
+        if not ids:
+            return serialized
+        names = {row.id: row.payload.get('name') for row in records(db,user,'product').filter(Record.id.in_(ids)).all()}
+        for item in serialized:
+            item['product_name'] = names.get(item.get('product_id'))
+        return serialized
+
     def insert(db, user, kind, payload, key=None):
         row = Record(workspace_id=user.workspace_id, kind=kind, key=key or uid(), payload=payload)
         db.add(row)
@@ -215,9 +234,10 @@ def create_app(settings=None):
         return {'sources':[{**s,'status':'unconfigured','last_success':None,'last_attempt':None,'next_retry':'After connection and source review','freshness_hours':24} for s in SOURCES], 'market':'NG', 'coverage':None, 'truth_state':'Unavailable'}
 
     @app.get('/api/v1/products')
-    def products(search: str = '', user=Depends(current_user), db=Depends(get_db)):
-        rows = records(db,user,'product').order_by(Record.created_at.desc()).limit(200).all()
-        return {'products':[serialize(r) for r in rows if search.lower() in r.payload['name'].lower()]}
+    def products(search: str = Query(default='', max_length=200), limit: int = DEFAULT_LIMIT,
+                 cursor: str | None = None, user=Depends(current_user), db=Depends(get_db)):
+        rows, page = paginate(searched(records(db,user,'product'), search, ['name','asin']), limit, cursor)
+        return {'products':[serialize(r) for r in rows], **page}
 
     @app.get('/api/v1/products/{product_id}')
     def product(product_id: str, user=Depends(current_user), db=Depends(get_db)):
@@ -315,16 +335,21 @@ def create_app(settings=None):
         return serialize(row) if created else same_submission(row)
 
     @app.get('/api/v1/decisions')
-    def decisions(user=Depends(current_user),db=Depends(get_db)):
-        return {'decisions':[serialize(r) for r in records(db,user,'decision').order_by(Record.created_at.desc()).all()]}
+    def decisions(limit: int = DEFAULT_LIMIT, cursor: str | None = None, product_id: str | None = None,
+                  user=Depends(current_user), db=Depends(get_db)):
+        query = records(db,user,'decision')
+        if product_id: query = query.filter(Record.payload['product_id'].as_string() == product_id)
+        rows, page = paginate(query, limit, cursor)
+        return {'decisions':[serialize(r) for r in rows], **page}
 
     @app.get('/api/v1/decisions/{decision_id}')
     def saved_decision(decision_id:str,user=Depends(current_user),db=Depends(get_db)):
         return serialize(owned(db,user,'decision',decision_id))
 
     @app.get('/api/v1/watchlists/default/items')
-    def watches(user=Depends(current_user),db=Depends(get_db)):
-        return {'items':[serialize(r) for r in records(db,user,'watch').all()]}
+    def watches(limit: int = DEFAULT_LIMIT, cursor: str | None = None, user=Depends(current_user), db=Depends(get_db)):
+        rows, page = paginate(records(db,user,'watch'), limit, cursor)
+        return {'items':with_product_names(db,user,rows), **page}
 
     @app.post('/api/v1/watchlists/default/items')
     def watch(payload:WatchRequest,user=Depends(writer),db=Depends(get_db)):
@@ -355,8 +380,39 @@ def create_app(settings=None):
         return {'alerts':[], 'status':'unavailable','reason':'Scheduled collection and alert delivery are not enabled.'}
 
     @app.get('/api/v1/quotes')
-    def quotes(user=Depends(current_user),db=Depends(get_db)):
-        return {'quotes':[serialize(r) for r in records(db,user,'quote').all()]}
+    def quotes(limit: int = DEFAULT_LIMIT, cursor: str | None = None, product_id: str | None = None,
+               user=Depends(current_user), db=Depends(get_db)):
+        query = records(db,user,'quote')
+        if product_id: query = query.filter(Record.payload['product_id'].as_string() == product_id)
+        rows, page = paginate(query, limit, cursor)
+        return {'quotes':with_product_names(db,user,rows), **page}
+
+    @app.get('/api/v1/export')
+    def export_workspace(user=Depends(current_user)):
+        """Every authorised record in this workspace, exactly once, independent of paging.
+
+        The generator opens its own session: a dependency-provided one is closed before a
+        streaming body is sent. Records are emitted oldest first with a stable
+        (created_at, id) order, so two exports of unchanged data are byte-identical.
+        """
+        def document():
+            with database.session() as export_db:
+                counts = {name: records(export_db,user,kind).count() for kind, name in EXPORT_KINDS}
+                header = {'workspace_id':user.workspace_id, 'workspace':user.name, 'exported_at':now(),
+                          'exported_by':user.id, 'demo':False, 'schema':'trendsell-workspace-export/1',
+                          'counts':counts}
+                yield json.dumps(header)[:-1]
+                for kind, name in EXPORT_KINDS:
+                    yield f',{json.dumps(name)}:['
+                    separator = ''
+                    for row in records(export_db,user,kind).order_by(Record.created_at.asc(), Record.id.asc()).yield_per(200):
+                        yield separator + json.dumps(serialize(row))
+                        separator = ','
+                    yield ']'
+                yield '}'
+        filename = f'trendsell-workspace-{now()[:10]}.json'
+        return StreamingResponse(document(), media_type='application/json',
+                                 headers={'Content-Disposition': f'attachment; filename="{filename}"'})
 
     @app.post('/api/v1/quotes',status_code=201)
     def quote(payload:QuoteRequest,user=Depends(writer),db=Depends(get_db)):

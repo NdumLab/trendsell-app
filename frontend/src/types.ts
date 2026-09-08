@@ -32,5 +32,5 @@ export interface Assessment {
   truth_state: Truth; currency: string; market: string; decision: Decision; confidence: number;
   observation_ids: string[]; blockers: string[]; scenarios: Scenario[]; inputs: Inputs; input_truth_state: Truth;
 }
-export interface Watch { id: string; product_id: string; threshold_pct: number; status: string; scheduled: boolean; created_at: string }
-export interface Quote { id: string; product_id: string; supplier: string; source_url: string; unit_price_usd: number; moq: number; lead_days: number; quote_date: string; incoterm: string; notes: string; truth_state: Truth; verification: string }
+export interface Watch { id: string; product_id: string; product_name?: string | null; threshold_pct: number; status: string; scheduled: boolean; created_at: string }
+export interface Quote { id: string; product_id: string; product_name?: string | null; supplier: string; source_url: string; unit_price_usd: number; moq: number; lead_days: number; quote_date: string; incoterm: string; notes: string; truth_state: Truth; verification: string }

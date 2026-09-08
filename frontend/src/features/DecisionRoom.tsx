@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowDownRight, ArrowRight, ArrowUpRight, Check, ChevronDown, Download, FileCheck2, History, Info, Save, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import { toast } from 'sonner';
+import { useQuery } from '@tanstack/react-query';
 import { useWorkspace } from '@/shared/Workspace';
+import { api } from '@/lib/api';
 import { DecisionBadge, Empty, Loading, Modal, Notice, PageTitle, TruthBadge } from '@/shared/UI';
 import { calculate, sensitivity, targets } from '@/lib/economics';
 import { dateTime, download, formatCompact, formatMoney } from '@/lib/utils';
-import type { Assessment, Inputs, Scenario } from '@/types';
+import type { Assessment, Inputs, Product, Scenario } from '@/types';
 
 type NumericKey = Exclude<keyof Inputs,'compliance'|'channel'|'shipping'>;
 const fieldGroups: {title:string;fields:{key:NumericKey;label:string;unit:string;min:number;max:number;step?:number;help?:string}[]}[]=[
@@ -17,7 +19,11 @@ const fieldGroups: {title:string;fields:{key:NumericKey;label:string;unit:string
 const fields=fieldGroups.flatMap(g=>g.fields);
 const initial=()=>Object.fromEntries(fields.map(f=>[f.key,''])) as Record<NumericKey,string>;
 export default function DecisionRoom(){
- const w=useWorkspace();const [params,setParams]=useSearchParams();const product=w.products.find(p=>p.id===params.get('product'))||w.products[0];
+ const w=useWorkspace();const [params,setParams]=useSearchParams();const requested=params.get('product');
+ // A product linked from elsewhere may sit past the loaded page, so read it by id (T05).
+ const linked=useQuery({queryKey:['product',requested],queryFn:()=>api<Product>(`/products/${requested}`),enabled:!!requested&&!w.demo&&!w.products.some(p=>p.id===requested),retry:false});
+ const product=w.products.find(p=>p.id===requested)||(requested?linked.data:undefined)||w.products[0];
+ const options=product&&!w.products.some(p=>p.id===product.id)?[product,...w.products]:w.products;
  const [values,setValues]=useState(initial);const [stress,setStress]=useState(10);const [channel,setChannel]=useState('Direct sales');const [shipping,setShipping]=useState<'Air'|'Sea'>('Air');const [compliance,setCompliance]=useState<'unresolved'|'prohibited'>('unresolved');const [busy,setBusy]=useState(false);const [saved,setSaved]=useState<Assessment|null>(null);const [history,setHistory]=useState(false);const [scenario,setScenario]=useState(1);
  // One key per logical submission. A failed save keeps it so the retry is idempotent;
  // a successful save or any input change starts a new one (action plan T06).
@@ -33,9 +39,9 @@ export default function DecisionRoom(){
  const labelOf=(key:NumericKey)=>fields.find(f=>f.key===key)?.label||key;
  const exportDecision=(a:Assessment)=>download(`trendsell-decision-${a.id||'draft'}.json`,JSON.stringify({...a,exported_at:new Date().toISOString(),demo:w.demo,threshold_version:'decision-gates/1.0.0',evidence:product?.observations||[]},null,2));
  if(w.loading)return <Loading/>;
- return <><PageTitle eyebrow="BEFORE YOU COMMIT" title="Make the decision yours." description="Real quotes. Editable assumptions. A clear view of what could go wrong." actions={<button className="button secondary" onClick={()=>setHistory(true)}><History size={16}/>Saved decisions<span className="count-badge">{w.decisions.length}</span></button>}/>
+ return <><PageTitle eyebrow="BEFORE YOU COMMIT" title="Make the decision yours." description="Real quotes. Editable assumptions. A clear view of what could go wrong." actions={<button className="button secondary" onClick={()=>setHistory(true)}><History size={16}/>Saved decisions<span className="count-badge">{w.decisionTotal}</span></button>}/>
  {!product?<div className="panel"><Empty title="Start with a product worth investigating." action={<Link to="/xray" className="button primary">Analyze a product<ArrowRight size={16}/></Link>}>Decision Room connects a product’s evidence to your commercial assumptions. Capture a product first, or explore the explicitly labeled demo.</Empty></div>:<>
- <div className="decision-toolbar"><label>INVESTIGATING<select aria-label="Choose product" value={product.id} onChange={e=>setParams({product:e.target.value})}>{w.products.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select></label><div className="decision-market"><span className="nigeria-flag"/><span>Nigeria</span><span className="muted-text">NGN scenarios</span></div><TruthBadge truth={w.demo?'Demo':'User input'}/></div>
+ <div className="decision-toolbar"><label>INVESTIGATING<select aria-label="Choose product" value={product.id} onChange={e=>setParams({product:e.target.value})}>{options.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select></label><div className="decision-market"><span className="nigeria-flag"/><span>Nigeria</span><span className="muted-text">NGN scenarios</span></div><TruthBadge truth={w.demo?'Demo':'User input'}/></div>
  <Notice kind={w.demo?'amber':'muted'}>{w.demo?'All prefilled figures are illustrative demo assumptions, including FX and import rates. They are not market quotes or regulatory guidance.':'Enter your own quotes, fees, FX, and import assumptions. No rates are supplied automatically. A reviewed classification is required before GO.'}</Notice>
  <div className="decision-room-layout"><section className="panel assumptions"><div className="section-heading"><div><h2>Your commercial inputs</h2><p>All amounts below come from you.</p></div><SlidersHorizontal size={18}/></div><form onSubmit={async e=>{e.preventDefault();if(!result)return;if(!w.requireUser())return;setBusy(true);try{const a=await w.saveDecision(result,product,submissionKey.current);setSaved(a);submissionKey.current=crypto.randomUUID();toast.success('Decision saved with its exact inputs and formula version');}catch(e){toast.error((e as Error).message);}finally{setBusy(false);}}}>
  {fieldGroups.map(g=><fieldset key={g.title}><legend>{g.title}</legend><div className="input-grid">{g.fields.map(f=><label className={f.help?'wide-input':''} key={f.key}>{f.label}<div className="unit-input"><input aria-label={f.label} type="number" required min={f.min} max={f.max} step={f.step||'any'} value={values[f.key]} placeholder="Enter value" onChange={e=>{setValues({...values,[f.key]:e.target.value});restartSubmission();}}/><span>{f.unit}</span></div>{f.help&&<small>{f.help}</small>}</label>)}</div></fieldset>)}
