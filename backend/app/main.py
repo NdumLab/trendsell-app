@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response, BackgroundTasks, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, HttpUrl, TypeAdapter, field_validator
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from .settings import Settings
@@ -27,8 +27,12 @@ SOURCES = [
 EXPORT_KINDS = [('product','products'), ('job','research_jobs'), ('decision','decisions'),
                 ('quote','quotes'), ('watch','watches')]
 
+HTTPS_URL = TypeAdapter(HttpUrl)
+
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    # str_strip_whitespace normalises *before* the length constraints run, so a name of
+    # two spaces is rejected instead of being stored empty (action plan T08).
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False, str_strip_whitespace=True)
 
 class Credentials(StrictModel):
     email: str = Field(min_length=5, max_length=254, pattern=r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
@@ -53,13 +57,28 @@ class WatchRequest(StrictModel):
 class QuoteRequest(StrictModel):
     product_id: str
     supplier: str = Field(min_length=2, max_length=200)
-    source_url: str = Field(min_length=8, max_length=2000, pattern=r'^https://')
+    source_url: str = Field(min_length=12, max_length=2000)
     unit_price_usd: float = Field(gt=0, le=1000000)
     moq: int = Field(ge=1, le=1000000)
     lead_days: int = Field(ge=1, le=1000)
     quote_date: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
     incoterm: Literal['EXW','FOB','CIF','DDP'] = 'FOB'
     notes: str = Field(default='', max_length=2000)
+
+    @field_validator('source_url')
+    @classmethod
+    def real_https_url(cls, value):
+        """A prefix check accepted 'https://', which addresses nothing (action plan T08).
+
+        TrendSell never fetches this reference; it must still be a link a person can open.
+        """
+        try:
+            url = HTTPS_URL.validate_python(value)
+        except Exception:
+            raise ValueError('Enter the full https:// address of the quote, for example https://supplier.example.com/quote-4821')
+        if url.scheme != 'https' or not url.host or '.' not in url.host:
+            raise ValueError('Enter the full https:// address of the quote, for example https://supplier.example.com/quote-4821')
+        return str(url)
 
 
 def create_app(settings=None):
@@ -386,6 +405,25 @@ def create_app(settings=None):
         if product_id: query = query.filter(Record.payload['product_id'].as_string() == product_id)
         rows, page = paginate(query, limit, cursor)
         return {'quotes':with_product_names(db,user,rows), **page}
+
+    @app.get('/api/v1/summary')
+    def summary(user=Depends(current_user), db=Depends(get_db)):
+        """Workspace counts computed in the database, not from whatever page is loaded (T05).
+
+        `products_awaiting_evidence` counts the product records whose evidence status is
+        not GO. It is a coverage figure, not a commercial verdict: a product's evidence
+        status and a user's saved assessment are different things (see T07).
+        """
+        products = records(db,user,'product')
+        decisions_query = records(db,user,'decision')
+        return {
+            'products': products.count(),
+            'products_awaiting_evidence': products.filter(Record.payload['decision'].as_string() != 'GO').count(),
+            'decisions': decisions_query.count(),
+            'decisions_go': decisions_query.filter(Record.payload['decision'].as_string() == 'GO').count(),
+            'quotes': records(db,user,'quote').count(),
+            'watches': records(db,user,'watch').count(),
+        }
 
     @app.get('/api/v1/export')
     def export_workspace(user=Depends(current_user)):

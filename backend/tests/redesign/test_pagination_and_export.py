@@ -10,6 +10,7 @@ still returned 200 and its decisions, quotes and watches remained.
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.db import Record
 from conftest import HEADERS
@@ -186,3 +187,31 @@ def test_decisions_and_quotes_can_be_filtered_to_one_product(client, owner):
     body = client.get('/api/v1/decisions', params={'product_id': first['product_id']}).json()
     assert body['total'] == 1
     assert body['decisions'][0]['product_id'] == first['product_id']
+
+
+def test_summary_counts_are_computed_in_the_database_not_from_a_page(client, big_workspace):
+    """A screen must be able to state the workspace total without loading every page."""
+    body = client.get('/api/v1/summary').json()
+    assert body['products'] == COUNT
+    assert body['products_awaiting_evidence'] == COUNT
+    assert body == {'products': COUNT, 'products_awaiting_evidence': COUNT, 'decisions': 0,
+                    'decisions_go': 0, 'quotes': 0, 'watches': 0}
+    assert client.get('/api/v1/products', params={'limit': 1}).json()['total'] == body['products']
+
+
+def test_summary_is_scoped_to_the_workspace_and_needs_a_session(client, big_workspace, second_client, stranger):
+    assert second_client.get('/api/v1/summary').json()['products'] == 0
+    assert client.get('/api/v1/summary').json()['products'] == COUNT
+    signed_out = TestClient(client.app)
+    assert signed_out.get('/api/v1/summary').status_code == 401
+
+
+def test_summary_counts_saved_decisions_separately_from_product_evidence(client, owner):
+    job = client.post('/api/v1/xray', json={'input': 'https://www.amazon.com/dp/B0ABCDEFGH'},
+                      headers={**HEADERS, 'Idempotency-Key': 's'}).json()
+    client.post(f'/api/v1/products/{job["product_id"]}/confirm', json={'name': 'Steamer'}, headers=HEADERS)
+    client.post('/api/v1/decisions', json={'product_id': job['product_id'], 'inputs': INPUTS},
+                headers={**HEADERS, 'Idempotency-Key': 'd'})
+    body = client.get('/api/v1/summary').json()
+    assert body['products'] == 1 and body['decisions'] == 1
+    assert body['decisions_go'] == 0
