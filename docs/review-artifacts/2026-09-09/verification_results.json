@@ -24,7 +24,7 @@
     "compliance": {
       "resolved": false,
       "status": "rejected",
-      "review_id": "b7394f11-e913-4aa8-a397-a5f10ecdfe99",
+      "review_id": "bd92ea8e-66e2-433a-8652-dcf857015859",
       "reason": "A reviewer rejected this product for import. Do not proceed."
     },
     "confidence": 60,
@@ -84,8 +84,8 @@
     "body": {
       "status": "schema_incomplete",
       "database": "ok",
-      "schema_revision": "0003_audit_detail",
-      "expected_revision": "0003_audit_detail",
+      "schema_revision": "0004_account_recovery",
+      "expected_revision": "0004_account_recovery",
       "schema_matches_models": false,
       "missing_tables": [
         "audit_events"
@@ -104,12 +104,16 @@
       ],
       "rate_buckets": [
         "expires_at"
+      ],
+      "sessions": [
+        "client",
+        "created_at"
       ]
     },
     "step5_revision": "0001_pilot_baseline",
     "step5_up_to_date": false,
     "step7_up_to_date": true,
     "step7_matches_models": true,
-    "head_revision": "0003_audit_detail"
+    "head_revision": "0004_account_recovery"
   }
 }
