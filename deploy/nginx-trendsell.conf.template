@@ -71,9 +71,23 @@ server {
     }
 
     # Hashed build assets are immutable.
+    #
+    # nginx `add_header` is *replaced*, never merged: a block that sets any header of its
+    # own drops every one inherited from the server block. Setting only Cache-Control here
+    # silently served every script and stylesheet with no nosniff, no CSP and no HSTS —
+    # the assets are the one thing on this site that is executable content. The security
+    # headers are therefore repeated, not inherited.
+    # One Cache-Control header, not two: `expires` emits its own, so pairing it with an
+    # explicit add_header sent both `max-age=2592000` and `public, immutable` on every
+    # asset. Filenames are content-hashed, so a year and `immutable` is the honest answer.
     location ^~ /assets/ {
-        expires 30d;
-        add_header Cache-Control "public, immutable";
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+        add_header Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self'; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" always;
         try_files $uri =404;
     }
 
