@@ -21,3 +21,6 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return body as T;
 }
 export const post = <T,>(path: string, body: unknown, key?: string) => api<T>(path, { method: 'POST', body: JSON.stringify(body), headers: key ? { 'Idempotency-Key': key } : {} });
+/** DELETE with a body. Account deletion requires the password and a typed phrase, which
+ *  belong in the body rather than the URL, where they would reach logs and history. */
+export const del = <T,>(path: string, body?: unknown) => api<T>(path, { method: 'DELETE', ...(body === undefined ? {} : { body: JSON.stringify(body) }) });

@@ -16,7 +16,21 @@ import { join } from 'node:path';
 const API_PORT = Number(process.env.TRENDSELL_E2E_API_PORT ?? 8123);
 const WEB_PORT = Number(process.env.TRENDSELL_E2E_WEB_PORT ?? 4173);
 const ORIGIN = `http://127.0.0.1:${WEB_PORT}`;
-const DATABASE = join(mkdtempSync(join(tmpdir(), 'trendsell-e2e-')), 'e2e.db');
+/** One disposable directory for the whole run, shared with the worker processes.
+ *
+ *  This config module is loaded again in every worker, so creating the directory
+ *  unconditionally would give each worker its own — and a test looking for the mail the
+ *  server wrote would read an empty directory that nothing writes to. Creating it once
+ *  and passing the path through the environment is what keeps them the same directory. */
+const RUN_DIR = process.env.TRENDSELL_E2E_RUN_DIR ?? mkdtempSync(join(tmpdir(), 'trendsell-e2e-'));
+process.env.TRENDSELL_E2E_RUN_DIR = RUN_DIR;
+const DATABASE = join(RUN_DIR, 'e2e.db');
+/** The local mail sink, so the browser can exercise the flows that carry a token —
+ *  password reset and email verification — exactly as a person would: by reading the
+ *  token out of the message that was sent, not out of the database. No provider ships
+ *  with the application, and `sink` must never be set in production. */
+const MAIL_DIR = join(RUN_DIR, 'mail');
+process.env.TRENDSELL_E2E_MAIL_DIR = MAIL_DIR;
 // The repository venv when it exists, so a local run needs no extra setup; plain `python` in CI.
 const PYTHON = process.env.TRENDSELL_E2E_PYTHON ?? '../.venv/bin/python';
 
@@ -64,6 +78,8 @@ export default defineConfig({
         // are not capped at one page (review finding R10). The shipped write limit is a
         // deliberate throttle on exactly that; test_request_limits.py covers it directly.
         WORKSPACE_WRITE_MINUTE_LIMIT: '5000',
+        MAIL_TRANSPORT: 'sink',
+        MAIL_SINK_DIR: MAIL_DIR,
       },
     },
     {

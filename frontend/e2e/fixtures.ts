@@ -120,3 +120,40 @@ export const test = base.extend<{ workspace: { email: string; workspace: string 
 });
 
 export { expect };
+
+/** The local mail sink this run's API writes to (playwright.config.ts sets both).
+ *
+ *  Reading the token out of the message is the point: it exercises the delivery path a
+ *  person actually uses, rather than reaching into the database and testing a token table.
+ */
+export function mailDir() {
+  const directory = process.env.TRENDSELL_E2E_MAIL_DIR;
+  if (!directory) throw new Error('TRENDSELL_E2E_MAIL_DIR is not set by playwright.config.ts');
+  return directory;
+}
+
+/** The newest message of one purpose, waiting briefly for it to be written. */
+export async function latestMessage(purpose: 'password_reset' | 'email_verification') {
+  const { readdirSync, readFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  for (let attempt = 0; attempt < 40; attempt++) {
+    let files: string[] = [];
+    try { files = readdirSync(mailDir()).filter(name => name.endsWith(`-${purpose}.json`)).sort(); }
+    catch { files = []; }
+    if (files.length) {
+      const body = JSON.parse(readFileSync(join(mailDir(), files[files.length - 1]), 'utf8'));
+      return body as { to: string; subject: string; purpose: string; body: string };
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`no ${purpose} message was written to the sink`);
+}
+
+/** The token a message carries, as the person reading it would copy it out. */
+export async function tokenFrom(purpose: 'password_reset' | 'email_verification') {
+  const message = await latestMessage(purpose);
+  const label = purpose === 'password_reset' ? 'Reset token:' : 'Verification token:';
+  const line = message.body.split('\n').find(text => text.startsWith(label));
+  if (!line) throw new Error(`no ${label} line in the ${purpose} message`);
+  return line.slice(label.length).trim();
+}

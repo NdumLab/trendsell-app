@@ -292,3 +292,15 @@
 .review-context p{font-size:10px;line-height:1.7;margin-top:6px;color:var(--muted)}
 .row-actions{display:flex;gap:8px;align-items:center;justify-content:flex-end}
 @media (max-width:760px){.quality-row{grid-template-columns:1fr;gap:6px}.quality-row>strong{text-align:left}}
+
+/* Account security (action plan P03). The destructive action is visually distinct from
+   every other button in the product, because it is the only irreversible one. */
+.button.danger{background:transparent;border-color:#ef8d9955;color:var(--rose)}
+.button.danger:hover:not(:disabled){background:#ef8d990f;border-color:var(--rose)}
+.danger-card{border-color:#ef8d9933}
+.danger-card .section-heading h2{color:var(--rose)}
+.danger-card .section-heading svg{color:var(--rose)}
+.settings-card code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:var(--input);border:1px solid var(--border-soft);border-radius:4px;padding:1px 5px}
+.settings-card .table-scroll{margin-bottom:14px}
+.settings-card table{font-size:11px}
+.settings-card th,.settings-card td{padding:11px 12px}
