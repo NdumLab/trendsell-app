@@ -236,6 +236,79 @@ def test_liveness_stays_independent_of_the_database(client):
     assert body['demo'] is False
 
 
+# --- The documented adoption sequence, run verbatim (R08) ---------------------------
+
+def test_checking_a_baseline_installation_against_the_models_is_the_wrong_question(blank_url):
+    """Review finding R08, first half: the runbook told operators to expect the wrong thing.
+
+    The installation being adopted is deliberately one revision behind, so it correctly
+    lacks what 0002 and 0003 add. Comparing it to today's models reports a mismatch on a
+    perfectly healthy database, and step 3 of the old guide then said to **stop**.
+    """
+    seed(blank_url, migrate.BASELINE)
+    against_models = migrate.check(blank_url)
+    assert against_models['matches_models'] is False
+    assert against_models['compared_against'] == 'models'
+    # And what it is missing is exactly what the later revisions are for.
+    assert 'expires_at' in against_models['missing_columns']['rate_buckets']
+
+    against_baseline = migrate.check(blank_url, against=migrate.BASELINE)
+    assert against_baseline['matches_models'] is True
+    assert against_baseline['compared_against'] == migrate.BASELINE
+    assert against_baseline['missing_tables'] == [] and against_baseline['missing_columns'] == {}
+
+
+def test_the_documented_adoption_sequence_reaches_head_and_reports_ready(blank_url):
+    """Review finding R08, second half: stamping 0001 does not leave the database current.
+
+    This walks the runbook's numbered steps in order through the same CLI an operator
+    runs, asserting each documented expectation, so the guide cannot drift from the tool
+    without this failing.
+    """
+    seed(blank_url, migrate.BASELINE)
+
+    # Step 2: check against the baseline — current_revision None, no missing tables.
+    adoption = migrate.check(blank_url, against=migrate.BASELINE)
+    assert adoption['current_revision'] is None
+    assert adoption['matches_models'] is True and adoption['missing_tables'] == []
+
+    # Step 4: stamp. Step 5: it is at the baseline and *not* yet up to date.
+    migrate.stamp_baseline(blank_url)
+    stamped = migrate.check(blank_url, against=migrate.BASELINE)
+    assert stamped['current_revision'] == migrate.BASELINE
+    assert stamped['up_to_date'] is False, 'the baseline is not head; the guide must say to upgrade'
+
+    # Step 6: apply the later revisions, which stamping deliberately does not do.
+    migrate.upgrade(blank_url)
+
+    # Step 7: only now do both questions agree, and the data survived all of it.
+    final = migrate.check(blank_url)
+    assert final['current_revision'] == final['head_revision'] == migrate.head_revision(blank_url)
+    assert final['up_to_date'] is True and final['matches_models'] is True
+    engine = create_engine(blank_url)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT key FROM records")).scalar() == 'B0PREEXIST'
+    finally:
+        engine.dispose()
+
+
+def test_the_check_command_exits_zero_for_a_baseline_adoption_but_not_for_readiness(blank_url):
+    """`--against` changes the question, so it must change the exit code too.
+
+    An adoption check on a correct baseline installation has to succeed for the documented
+    sequence to be runnable in a script; the same database checked against the models is
+    still legitimately a failure, because it is not ready to serve.
+    """
+    seed(blank_url, migrate.BASELINE)
+    migrate.stamp_baseline(blank_url)
+    assert migrate.main(['check', '--url', blank_url, '--against', migrate.BASELINE]) == 0
+    assert migrate.main(['check', '--url', blank_url]) == 1
+
+    migrate.upgrade(blank_url)
+    assert migrate.main(['check', '--url', blank_url]) == 0
+
+
 # --- Readiness inspects the physical schema, not only the revision label (R09) ------
 
 @pytest.fixture

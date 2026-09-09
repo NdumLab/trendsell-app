@@ -5,7 +5,9 @@ installation had a schema created once by an untracked script and no upgrade pat
 This module supplies the missing pieces:
 
 ``check``    report the database's current revision, the revision the code expects, and
-             whether the physical tables match — without changing anything.
+             whether the physical tables match — without changing anything. ``--against
+             <revision>`` compares to that revision's schema rather than to the models,
+             which is what adopting a deliberately-behind installation needs.
 ``upgrade``  run outstanding migrations.
 ``stamp``    adopt an existing, already-correct schema by writing the baseline revision.
              It refuses unless the schema really matches, so it can never be used to skip
@@ -102,10 +104,20 @@ def schema_report(engine, expected_schema=None):
     }
 
 
-def check(url):
+def check(url, against=None):
+    """Report revision and physical schema state, changing nothing.
+
+    `against` compares the tables to a specific revision's schema instead of to today's
+    models. Review finding R08: an installation being adopted matches the *baseline* and
+    correctly lacks the columns later revisions add, so asking whether it matches the
+    current models is the wrong question and answers `False` on a perfectly healthy
+    database. Adoption asks "does this match 0001?"; readiness asks "does this match the
+    models?" — and only after the upgrades have run are those the same question.
+    """
     engine = create_engine(url)
     try:
-        report = schema_report(engine)
+        report = schema_report(engine, revision_schema(against) if against else None)
+        report['compared_against'] = against or 'models'
         report['current_revision'] = current_revision(engine)
         report['head_revision'] = head_revision(url)
         report['up_to_date'] = report['current_revision'] == report['head_revision']
@@ -162,15 +174,20 @@ def main(argv=None):
     parser.add_argument('--url', help='Database URL. Defaults to the application settings.')
     parser.add_argument('--revision', default=None,
                         help='upgrade target (default head), or the revision to stamp (default the baseline)')
+    parser.add_argument('--against', default=None,
+                        help='check the schema against this revision instead of the current models, '
+                             'e.g. --against 0001_pilot_baseline when adopting an existing installation')
     args = parser.parse_args(argv)
     url = args.url or Settings.from_env().database_url
 
     if args.action == 'check':
-        report = check(url)
-        for key in ('current_revision', 'head_revision', 'up_to_date', 'matches_models',
-                    'missing_tables', 'missing_columns', 'unexpected_tables'):
+        report = check(url, args.against)
+        for key in ('compared_against', 'current_revision', 'head_revision', 'up_to_date',
+                    'matches_models', 'missing_tables', 'missing_columns', 'unexpected_tables'):
             print(f'{key}: {report[key]}')
-        return 0 if report['up_to_date'] and report['matches_models'] else 1
+        # With `--against`, being behind head is the expected state, not a failure: the
+        # question asked was whether the schema matches that revision.
+        return 0 if report['matches_models'] and (args.against or report['up_to_date']) else 1
     if args.action == 'upgrade':
         upgrade(url, args.revision or 'head')
         print(f'upgraded to {current_revision(create_engine(url))}')

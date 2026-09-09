@@ -16,14 +16,27 @@ migration system and production never calls it.
 | Command (run from `backend/`) | What it does |
 | --- | --- |
 | `python -m app.migrate check` | Prints the recorded revision, the revision the code expects, and whether the physical tables match the models. Exit code 0 only when both agree. Changes nothing. |
+| `python -m app.migrate check --against <revision>` | Same, but compares the tables to that revision's schema instead of to the models, and does not treat being behind head as a failure. This is the adoption question, not the readiness question. |
 | `python -m app.migrate upgrade` | Runs outstanding migrations. |
-| `python -m app.migrate stamp` | Adopts an existing, already-correct schema as the baseline. |
+| `python -m app.migrate stamp` | Adopts an existing, already-correct schema as the baseline. It does **not** apply later revisions. |
 
-All three accept `--url` to target a database other than the one in the environment.
+All accept `--url` to target a database other than the one in the environment.
 
-`GET /api/ready` answers the same question over HTTP: 200 when the recorded revision
-matches the code, 503 with `schema_mismatch` otherwise. `GET /api/health` is liveness only
-and does not touch the database, so a schema problem does not look like a dead process.
+Two different questions are easy to confuse, and confusing them is what made the previous
+version of the next section wrong:
+
+* *Does this schema match revision X?* — asked while adopting an installation that is
+  deliberately behind. Use `check --against X`.
+* *Is this database ready to serve today's code?* — asked before and after a release. Use
+  plain `check`, or `/api/ready`.
+
+`GET /api/ready` answers the second over HTTP: 200 only when the recorded revision matches
+the code **and** the tables and columns the models declare are physically present. A wrong
+revision returns 503 `schema_mismatch`; a right revision over a broken schema returns 503
+`schema_incomplete` and names the missing tables and columns. That inspection is cached for
+`SCHEMA_RECHECK_SECONDS` (default 30) so probing stays cheap, and a revision change
+refreshes it immediately. `GET /api/health` is liveness only and does not touch the
+database, so a schema problem does not look like a dead process.
 
 ## Adopting the existing installation (one time)
 
@@ -31,16 +44,30 @@ The running installation's tables were created once by an untracked
 `/opt/trendsell/bootstrap_schema.py`, so its `alembic_version` table does not exist yet.
 Adopt it rather than re-creating it:
 
+The installation predates every revision, so it matches `0001_pilot_baseline` and
+correctly **lacks** what `0002` and `0003` add. Check it against the baseline, not against
+today's models — a plain `check` reports `matches_models: False` on a perfectly healthy
+pre-migration database.
+
 1. Take a backup and confirm it restores (see *Backup and restore* below).
-2. `python -m app.migrate check` — expect `current_revision: None`, `matches_models: True`,
-   `missing_tables: []`.
-3. If `matches_models` is `False`, **stop**. The schema differs from the code; resolve that
-   before anything else.
+2. `python -m app.migrate check --against 0001_pilot_baseline` — expect
+   `current_revision: None`, `matches_models: True`, `missing_tables: []`.
+3. If `matches_models` is `False` **in that command**, stop. The schema differs from the
+   baseline; resolve that before anything else.
 4. `python -m app.migrate stamp` — writes `0001_pilot_baseline`. It refuses an empty
    database, a database that already records a revision, and any schema that does not
    match, so it cannot be used to skip a migration.
-5. `python -m app.migrate check` — expect `up_to_date: True`.
-6. `curl -fsS https://<domain>/api/ready` — expect 200 and `"status":"ready"`.
+5. `python -m app.migrate check --against 0001_pilot_baseline` — expect
+   `current_revision: 0001_pilot_baseline`. `up_to_date` is still `False`, which is
+   correct: stamping adopts the baseline and deliberately applies nothing after it.
+6. `python -m app.migrate upgrade` — applies `0002` and `0003`.
+7. `python -m app.migrate check` — now against the models, expect `up_to_date: True` and
+   `matches_models: True`.
+8. `curl -fsS https://<domain>/api/ready` — expect 200 and `"status":"ready"`.
+
+`backend/tests/redesign/test_migrations.py` runs this sequence against a disposable clone
+of the pre-migration schema, so the steps above cannot drift from the tool without the
+suite failing.
 
 The baseline has no downgrade: dropping it would destroy every customer record. Rolling
 back a bad schema change means restoring a backup, not downgrading.
