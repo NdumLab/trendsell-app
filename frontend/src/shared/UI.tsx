@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { ArrowUpRight, Check, ChevronRight, ExternalLink, FileSearch, Info, LoaderCircle, X } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { ArrowUpRight, Check, ChevronRight, ExternalLink, FileSearch, Info, LoaderCircle, Search, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
+import { api } from '@/lib/api';
 import { dateTime, relativeTime } from '@/lib/utils';
 import { useWorkspace } from './Workspace';
 import type { Decision, LatestAssessment, Observation, Product, Truth } from '@/types';
@@ -73,4 +75,41 @@ export function ProductArt({kind='steamer',small=false}:{kind?:Product['illustra
 export function ProductCard({product,onEvidence}:{product:Product;onEvidence:(observation:Observation)=>void}){
  const workspace=useWorkspace();const [busy,setBusy]=useState(false);const watched=workspace.watches.some(w=>w.product_id===product.id);
  return <article className="product-card"><div className="product-card-top"><span className="category-label">{product.category}</span><TruthBadge truth={product.truth_state}/></div><Link to={`/products/${product.id}`} tabIndex={-1} aria-hidden="true"><ProductArt kind={product.illustration}/></Link><div className="product-card-body"><div className="stage"><span/>{product.stage}</div><Link className="product-name" to={`/products/${product.id}`}>{product.name}<ArrowUpRight size={17}/></Link><div className="card-decision"><span className="evidence-status"><small>Evidence</small><DecisionBadge decision={product.decision}/></span><button className="confidence" onClick={()=>product.observations[0]?onEvidence(product.observations[0]):toast.info('No observations collected. Confidence is suppressed.')}>{product.confidence}<span>/100 confidence</span></button></div><div className="card-assessment"><small>Your latest assessment</small><AssessmentSummary assessment={product.latest_assessment} compact/></div><div className="signal-list">{(product.signals||['Product identifier captured','Source verification is pending']).map(s=><div key={s}><Check size={13}/>{s}</div>)}</div><div className="risk"><Info size={14}/><span>{product.blocker}</span></div><div className="card-footer"><span title={dateTime(product.created_at)}>{product.truth_state==='Demo'?'Example · ':''}{relativeTime(product.created_at)}</span><button className="text-button" disabled={busy||watched} onClick={async()=>{setBusy(true);try{await workspace.watch(product.id);toast.success('Added to watchlist');}catch(e){toast.error((e as Error).message);}finally{setBusy(false);}}}>{watched?'Watching':'Watch'}<ChevronRight size={14}/></button></div></div></article>;
+}
+
+/** A product chooser that asks the server, not the pages a screen happens to have loaded.
+ *
+ *  Review finding R10: supplier quotes and RFQs picked from `workspace.products`, which
+ *  starts at one page of 50 and is additionally narrowed by whatever was typed on
+ *  Discover. A user with 300 products could not quote against the 51st, and a stale
+ *  Discover search silently removed options from an unrelated screen. This runs its own
+ *  search so every authorised product is reachable, and owns its own term so no other
+ *  screen can filter it.
+ *
+ *  `confirmedOnly` serves the RFQ draft, which may only name a product the user confirmed.
+ */
+export function ProductPicker({name,confirmedOnly=false}:{name:string;confirmedOnly?:boolean}){
+  const w=useWorkspace();
+  const [term,setTerm]=useState('');
+  const search=term.trim();
+  const query=useQuery({
+    queryKey:['product-picker',w.user?.workspace_id,search,confirmedOnly],
+    queryFn:()=>api<{products:Product[];total:number}>(`/products?limit=50${search?`&search=${encodeURIComponent(search)}`:''}`),
+    enabled:!w.demo&&!!w.user,retry:false});
+  const matched=w.demo
+    ? w.products.filter(p=>!search||`${p.name} ${p.asin}`.toLowerCase().includes(search.toLowerCase()))
+    : query.data?.products ?? [];
+  const options=confirmedOnly?matched.filter(p=>p.confirmed):matched;
+  const total=w.demo?options.length:query.data?.total ?? 0;
+  return <>
+    <label>Find a product<span className="search-input"><Search size={16}/>
+      <input aria-label="Search your products" placeholder="Search by name or identifier…"
+             value={term} onChange={e=>setTerm(e.target.value)}/></span></label>
+    <label>Product<select name={name} required disabled={!options.length}>
+      {options.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+    </select></label>
+    {options.length
+      ? <p className="form-caption">{query.isFetching?'Searching…':`Choosing from ${options.length} of ${total} products.`}{total>options.length&&' Search to narrow to one that is not listed.'}</p>
+      : <p className="form-caption">{query.isFetching?'Searching…':search?'No product matches that search.':'No products yet.'}</p>}
+  </>;
 }

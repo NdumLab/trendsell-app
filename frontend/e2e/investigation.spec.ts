@@ -39,7 +39,10 @@ test.describe('a complete manual investigation', () => {
     await page.goto('/suppliers');
     await page.getByRole('button', { name: 'Add a quote' }).click();
     const form = page.getByRole('dialog');
-    await form.getByLabel('Product').selectOption({ label: name });
+    // The picker searches the server, so it is located by role: its wrapping <label>
+    // contains the option text, and "Product" as a label substring also matches the
+    // picker's own search box.
+    await form.getByRole('combobox', { name: 'Product' }).selectOption({ label: name });
     await form.getByLabel('Supplier name').fill('Example Manufacturing Ltd');
     await form.getByLabel('Supplier or quote source URL').fill('https://supplier.example.com/quote-4821');
     await form.getByLabel('Unit price (USD)').fill('8.40');
@@ -60,7 +63,10 @@ test.describe('a complete manual investigation', () => {
     await page.goto('/suppliers');
     await page.getByRole('button', { name: 'Add a quote' }).click();
     const form = page.getByRole('dialog');
-    await form.getByLabel('Product').selectOption({ label: name });
+    // The picker searches the server, so it is located by role: its wrapping <label>
+    // contains the option text, and "Product" as a label substring also matches the
+    // picker's own search box.
+    await form.getByRole('combobox', { name: 'Product' }).selectOption({ label: name });
     await form.getByLabel('Supplier name').fill('Example Manufacturing Ltd');
     // The browser's own url validation would block "https://", so use a shape it accepts.
     await form.getByLabel('Supplier or quote source URL').fill('https://localhost');

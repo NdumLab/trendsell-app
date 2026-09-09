@@ -55,11 +55,15 @@ export default defineConfig({
         DATABASE_URL: `sqlite:///${DATABASE}`,
         CORS_ORIGINS: `${ORIGIN},http://localhost:${WEB_PORT}`,
         ALLOW_REGISTRATION: 'true',
-        RESEARCH_DAILY_LIMIT: '200',
+        RESEARCH_DAILY_LIMIT: '1000',
         // Each browser test signs into its own throwaway workspace, which the shipped
         // per-address limits would (correctly) stop. test_request_limits.py covers them.
         REGISTER_IP_HOURLY_LIMIT: '500',
         LOGIN_IP_HOURLY_LIMIT: '500',
+        // large-workspace.spec.ts seeds several hundred records to prove the list screens
+        // are not capped at one page (review finding R10). The shipped write limit is a
+        // deliberate throttle on exactly that; test_request_limits.py covers it directly.
+        WORKSPACE_WRITE_MINUTE_LIMIT: '5000',
       },
     },
     {

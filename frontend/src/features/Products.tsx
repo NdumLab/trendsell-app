@@ -17,7 +17,11 @@ export function Discover(){
  // The search term is a server parameter (T05). Category and decision still filter the
  // pages that are loaded, so the count below says how many of the total those pages cover.
  const search=params.get('q')||'';
+ // Review finding R10: the term lived in workspace state and outlived this screen, so a
+ // search typed here kept narrowing the product list everywhere else. It is Discover's
+ // filter, so it is cleared when Discover goes away.
  useEffect(()=>{w.setProductSearch(search);},[search]);
+ useEffect(()=>()=>w.setProductSearch(''),[]);
  const categories=['All products',...new Set(w.products.map(p=>p.category))];
  const products=w.products.filter(p=>(category==='All products'||p.category===category)&&(decision==='All decisions'||p.decision===decision));
  const narrowed=category!=='All products'||decision!=='All decisions';

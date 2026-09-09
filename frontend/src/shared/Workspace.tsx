@@ -10,8 +10,6 @@ type QuoteDraft = Omit<Quote,'id'|'truth_state'|'verification'>;
  *  how much it is not showing instead of implying the page is everything (action plan T05). */
 interface Page { total: number; limit: number; next_cursor: string | null }
 const PAGE = 50;
-/** Quotes and watches load in one request today; the total tells us when that stops being true. */
-const FLAT_PAGE = 200;
 
 interface Store {
   demo: boolean; user: User | null; products: Product[]; watches: Watch[]; decisions: Assessment[]; quotes: Quote[];
@@ -19,6 +17,8 @@ interface Store {
   productSearch: string; setProductSearch: (term: string)=>void;
   moreProducts: boolean; loadMoreProducts: ()=>void; loadingMoreProducts: boolean;
   moreDecisions: boolean; loadMoreDecisions: ()=>void;
+  moreQuotes: boolean; loadMoreQuotes: ()=>void; loadingMoreQuotes: boolean;
+  moreWatches: boolean; loadMoreWatches: ()=>void; loadingMoreWatches: boolean;
   loading: boolean; error: string | null; authOpen: boolean; setAuthOpen: (open: boolean)=>void;
   enterDemo: ()=>Promise<void>; exitDemo: ()=>void; refresh: ()=>Promise<void>; requireUser: ()=>boolean;
   signOut: ()=>Promise<void>;
@@ -57,8 +57,21 @@ export function WorkspaceProvider({children}:{children:React.ReactNode}) {
     initialPageParam:'' as string,
     getNextPageParam:(last:{next_cursor:string|null})=>last.next_cursor ?? undefined,
     enabled});
-  const watches=useQuery({queryKey:['watches',user?.workspace_id],queryFn:()=>api<{items:Watch[]}&Page>(`/watchlists/default/items?limit=${FLAT_PAGE}`),enabled});
-  const quotes=useQuery({queryKey:['quotes',user?.workspace_id],queryFn:()=>api<{quotes:Quote[]}&Page>(`/quotes?limit=${FLAT_PAGE}`),enabled});
+  // Review finding R10: these fetched a flat first 200 with no way to reach record 201,
+  // while their badges reported the true total — so the count promised more than the
+  // screen could show. They page like every other growing list now.
+  const watches=useInfiniteQuery({
+    queryKey:['watches',user?.workspace_id],
+    queryFn:({pageParam})=>api<{items:Watch[]}&Page>(`/watchlists/default/items?${query({limit:PAGE,cursor:pageParam})}`),
+    initialPageParam:'' as string,
+    getNextPageParam:(last:{next_cursor:string|null})=>last.next_cursor ?? undefined,
+    enabled});
+  const quotes=useInfiniteQuery({
+    queryKey:['quotes',user?.workspace_id],
+    queryFn:({pageParam})=>api<{quotes:Quote[]}&Page>(`/quotes?${query({limit:PAGE,cursor:pageParam})}`),
+    initialPageParam:'' as string,
+    getNextPageParam:(last:{next_cursor:string|null})=>last.next_cursor ?? undefined,
+    enabled});
   const enterDemo=async()=>{
     const {demoProducts:fixtures}=await import('@/demo');
     const saved=safeArray<Product>('trendsell-demo-v2-products');
@@ -127,18 +140,22 @@ export function WorkspaceProvider({children}:{children:React.ReactNode}) {
   const livePages=products.data?.pages ?? [];
   const liveProducts=livePages.flatMap(p=>p.products);
   const liveDecisions=decisions.data?.pages.flatMap(p=>p.decisions) ?? [];
+  const liveWatches=watches.data?.pages.flatMap(p=>p.items) ?? [];
+  const liveQuotes=quotes.data?.pages.flatMap(p=>p.quotes) ?? [];
   const value:Store={demo,user:demo?null:user,
     products:demo?demoMatches:liveProducts,
-    watches:demo?demoWatches:watches.data?.items||[],
+    watches:demo?demoWatches:liveWatches,
     decisions:demo?demoDecisions:liveDecisions,
-    quotes:demo?demoQuotes:quotes.data?.quotes||[],
+    quotes:demo?demoQuotes:liveQuotes,
     productTotal:demo?demoMatches.length:livePages[0]?.total ?? 0,
     decisionTotal:demo?demoDecisions.length:decisions.data?.pages[0]?.total ?? 0,
-    quoteTotal:demo?demoQuotes.length:quotes.data?.total ?? 0,
-    watchTotal:demo?demoWatches.length:watches.data?.total ?? 0,
+    quoteTotal:demo?demoQuotes.length:quotes.data?.pages[0]?.total ?? 0,
+    watchTotal:demo?demoWatches.length:watches.data?.pages[0]?.total ?? 0,
     productSearch,setProductSearch,
     moreProducts:!demo&&!!products.hasNextPage,loadMoreProducts:()=>{void products.fetchNextPage();},loadingMoreProducts:products.isFetchingNextPage,
     moreDecisions:!demo&&!!decisions.hasNextPage,loadMoreDecisions:()=>{void decisions.fetchNextPage();},
+    moreQuotes:!demo&&!!quotes.hasNextPage,loadMoreQuotes:()=>{void quotes.fetchNextPage();},loadingMoreQuotes:quotes.isFetchingNextPage,
+    moreWatches:!demo&&!!watches.hasNextPage,loadMoreWatches:()=>{void watches.fetchNextPage();},loadingMoreWatches:watches.isFetchingNextPage,
     loading:demo?demoProducts.length===0:me.isLoading||(enabled&&products.isLoading),error,authOpen,setAuthOpen,enterDemo,exitDemo,refresh,
     requireUser:()=>{if(demo||user)return true;setAuthOpen(true);return false;},
     signOut:async()=>{
