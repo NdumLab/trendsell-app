@@ -123,8 +123,12 @@ export function CompliancePanel({ product }: { product: Product }) {
     {state.error ? <Notice kind="amber">{state.error.message}</Notice> : gate &&
       <Notice kind={gate.resolved ? 'muted' : 'amber'}>
         <strong>{{ none: 'Not reviewed', requested: 'Waiting for a reviewer', approved: 'Approved',
-          rejected: 'Rejected', expired: 'Approval expired', more_information: 'More information needed' }[gate.status]}</strong>
+          rejected: 'Rejected', expired: 'Approval expired', support_expired: 'Supporting source expired',
+          review_incomplete: 'New review required', superseded: 'Replaced by a new request',
+          more_information: 'More information needed' }[gate.status]}</strong>
         {' — '}{gate.reason}
+        {gate.re_review_pending && <> A new review has been requested and is waiting for a reviewer;
+          the decision above stands until that one is decided.</>}
       </Notice>}
     {gate?.resolved && <dl className="metadata">
       <div><dt>Classification</dt><dd>{gate.hs_code || 'Not stated'}</dd></div>
@@ -228,8 +232,9 @@ export function CompliancePanel({ product }: { product: Product }) {
 }
 
 /** The evidence ledger: every record, its provenance, and a way to withdraw a mistake. */
-export function EvidenceLedger({ product, records, onInspect, onAdd }:
-  { product: Product; records: Observation[]; onInspect: (observation: Observation) => void; onAdd: () => void }) {
+export function EvidenceLedger({ product, records, unavailable, onRetry, onInspect, onAdd }:
+  { product: Product; records: Observation[]; unavailable?: boolean; onRetry?: () => void;
+    onInspect: (observation: Observation) => void; onAdd: () => void }) {
   const client = useQueryClient();
   const [removing, setRemoving] = useState('');
   return <div className="panel evidence-ledger">
@@ -261,7 +266,14 @@ export function EvidenceLedger({ product, records, onInspect, onAdd }:
             }}><Trash2 size={15} /></button>
         </td>
       </tr>)}</tbody>
-    </table></div> : <Empty title="No evidence recorded yet"
+    </table></div> : unavailable
+      // An unavailable read is not an empty ledger. Saying "nothing recorded" here would
+      // state as fact something this screen could not check (review finding F03).
+      ? <Notice kind="amber">This product’s evidence records could not be loaded, so the ledger
+          below is not shown. This is not a statement that no evidence exists.
+          {onRetry && <> <button className="text-button" onClick={onRetry}>Retry</button></>}
+        </Notice>
+      : <Empty title="No evidence recorded yet"
       action={<button className="button primary" onClick={onAdd}><FilePlus2 size={15} />Record your first observation</button>}>
       Nothing has been collected automatically, and nothing has been entered. Record what you have found,
       with its date and source, and it becomes part of this product’s ledger.

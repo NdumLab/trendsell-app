@@ -446,6 +446,11 @@ def test_an_approval_must_name_the_classification_it_reviewed(client, requested,
     assert approve(client, requested, hs_code='').status_code == 422
 
 
+@pytest.mark.parametrize('code', ['.', '....', '12.34', '8451.', '8451..30', '8451.3'])
+def test_an_approval_requires_a_structured_classification(client, requested, reviewer, code):
+    assert approve(client, requested, hs_code=code).status_code == 422
+
+
 def test_an_approval_with_no_requirements_must_say_so_deliberately(client, requested, reviewer):
     """An empty list is silence; a reviewer has to state that none apply."""
     assert approve(client, requested, requirements=[]).status_code == 422
@@ -485,6 +490,101 @@ def test_a_stored_approval_stops_resolving_once_its_support_lapses(client, confi
     gate = client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']
     assert gate['resolved'] is False
     assert gate['status'] == 'support_expired'
+
+
+def test_asking_again_does_not_erase_a_reviewer_s_rejection(client, confirmed, requested, reviewer):
+    """Review finding E03: a pending request outranked a decision.
+
+    The gate read the newest review record of *any* status, so anyone holding
+    `workspace.write` could clear a reviewer's rejection from every later assessment
+    simply by requesting another review — no reviewer involved. A question is not an
+    answer: the last decision stands until a reviewer gives a new one.
+    """
+    client.post(f'/api/v1/compliance/reviews/{requested}/decision',
+                json={'status': 'rejected', 'rationale': 'Prohibited for import in this market.'},
+                headers=HEADERS)
+    assert client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']['status'] == 'rejected'
+
+    again = client.post(f'/api/v1/products/{confirmed}/compliance/requests',
+                        json={**REVIEW_REQUEST, 'product_id': confirmed}, headers=HEADERS)
+    assert again.status_code == 201
+    state = client.get(f'/api/v1/products/{confirmed}/compliance').json()
+
+    assert state['gate']['status'] == 'rejected', 'a pending request erased the rejection'
+    assert state['gate']['resolved'] is False
+    assert state['gate']['re_review_pending'] is True      # shown, but not in charge
+    assert state['current']['status'] == 'requested'       # the new request is still visible
+
+    # And the assessment saved afterwards still carries the rejection.
+    saved = client.post('/api/v1/decisions', json={'product_id': confirmed, 'inputs': INPUTS},
+                        headers={**HEADERS, 'Idempotency-Key': 'e03'}).json()
+    assert saved['decision'] == 'NO-GO'
+    assert any('reviewer rejected' in blocker for blocker in saved['blockers']), saved['blockers']
+
+
+def test_asking_again_does_not_leave_an_approval_resolving(client, confirmed, requested, reviewer):
+    """The mirror case, deliberately asymmetric: asking again can hold or worsen the gate,
+    never improve it. A replaced approval says so rather than claiming it expired."""
+    approve(client, requested)
+    assert client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']['resolved'] is True
+
+    client.post(f'/api/v1/products/{confirmed}/compliance/requests',
+                json={**REVIEW_REQUEST, 'product_id': confirmed}, headers=HEADERS)
+    gate = client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']
+    assert gate['resolved'] is False
+    assert gate['status'] == 'superseded'
+    assert 'expired' not in gate['reason'].lower(), gate['reason']
+
+
+def test_one_review_accepts_exactly_one_decision_under_postgres(client, app, requested, reviewer,
+                                                                database_url):
+    """Two decisions submitted at the same moment must not both be accepted.
+
+    The status check and the write were not under a lock, so both requests read
+    `requested`, both returned 200, and the later commit replaced the earlier decision --
+    a rejection could be overwritten by an approval that then resolved the gate, with two
+    `compliance.reviewed` events recorded against one review.
+    """
+    if not database_url.startswith('postgresql'):
+        pytest.skip('PostgreSQL row-lock behaviour')
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from fastapi.testclient import TestClient
+    from app.db import Audit
+
+    cookies = dict(client.cookies)
+    barrier = Barrier(2, timeout=20)
+
+    def decide(body):
+        with TestClient(app) as contender:
+            contender.cookies.update(cookies)
+            barrier.wait()          # both requests enter the endpoint together
+            return contender.post(f'/api/v1/compliance/reviews/{requested}/decision',
+                                  json=body, headers=HEADERS).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(decide, dict(APPROVAL))
+        second = pool.submit(decide, {'status': 'rejected',
+                                      'rationale': 'Rejected by a second reviewer at the same moment.'})
+        statuses = sorted([first.result(timeout=40), second.result(timeout=40)])
+
+    assert statuses == [200, 409], statuses
+    with app.state.database.session() as db:
+        decided = db.query(Audit).filter_by(action='compliance.reviewed').count()
+    assert decided == 1, f'one review recorded {decided} decisions'
+
+
+def test_a_legacy_incomplete_approval_cannot_clear_the_current_gate(client, confirmed, requested, reviewer):
+    approve(client, requested)
+    with client.app.state.database.session() as db:
+        row = db.query(Record).filter_by(kind='compliance_review', id=requested).one()
+        payload = dict(row.payload)
+        payload.update(hs_code='', requirements=[], no_additional_requirements=False)
+        row.payload = payload
+        db.commit()
+    gate = client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']
+    assert gate['resolved'] is False
+    assert gate['status'] == 'review_incomplete'
 
 
 # --- R04: a reviewer's rejection decides the assessment ------------------------------

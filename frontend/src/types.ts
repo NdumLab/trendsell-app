@@ -18,7 +18,8 @@ export interface EvidenceQuality {
   limitations: string[];
 }
 export interface ComplianceGate {
-  resolved: boolean; status: 'none'|'requested'|'approved'|'rejected'|'expired'|'more_information';
+  resolved: boolean; status: 'none'|'requested'|'approved'|'rejected'|'expired'|'support_expired'|'review_incomplete'|'superseded'|'more_information';
+  re_review_pending?: boolean;
   reason: string; review_id?: string; expires_at?: string; hs_code?: string; requirements?: string[];
 }
 export interface ComplianceReview {
@@ -44,7 +45,10 @@ export interface Product {
   evidence_quality?: EvidenceQuality; compliance?: ComplianceGate;
   illustration?: 'steamer' | 'lamp' | 'blender'; signals?: string[];
 }
-export interface User { id: string; name: string; email: string; workspace_id: string; role: 'owner' | 'analyst' | 'viewer' }
+export interface User { id: string; name: string; email: string; workspace_id: string;
+  role: 'owner' | 'analyst' | 'reviewer' | 'viewer';
+  /** Null until this installation has proved control of the address. */
+  email_verified?: boolean; email_verified_at?: string | null }
 export interface JobEvent { id: number; step: string; status: string; detail: string; at: string }
 export interface Job { id: string; product_id: string; status: string; events: JobEvent[] }
 export interface Source { id: string; name: string; category: string; markets: string[]; reason: string; rights: string; status: string; last_success: string | null; last_attempt: string | null; next_retry: string; freshness_hours: number }
@@ -73,3 +77,8 @@ export interface Assessment {
 }
 export interface Watch { id: string; product_id: string; product_name?: string | null; product_decision?: Decision; latest_assessment?: LatestAssessment | null; threshold_pct: number; status: string; scheduled: boolean; created_at: string }
 export interface Quote { id: string; product_id: string; product_name?: string | null; supplier: string; source_url: string; unit_price_usd: number; moq: number; lead_days: number; quote_date: string; incoterm: string; notes: string; truth_state: Truth; verification: string }
+
+/** One sign-in session on this account. `id` is a one-way handle, never a token. */
+export interface AccountSession {
+  id: string; started_at: string; expires_at: string; client: string | null; current: boolean;
+}

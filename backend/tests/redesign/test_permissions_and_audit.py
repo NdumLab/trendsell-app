@@ -14,7 +14,7 @@ import logging
 import pytest
 
 from app.db import Audit, User
-from app.observability import JsonFormatter, route_label
+from app.observability import UNMATCHED_LABEL, JsonFormatter, route_label
 from app.permissions import PERMISSIONS, ROLES, granted
 from app.main import EXPORT_SCHEMA
 from conftest import HEADERS, OPERATOR, PASSWORD
@@ -185,10 +185,57 @@ def test_a_log_line_is_json_and_carries_the_request_id():
     assert line['level'] == 'info'
 
 
-def test_route_labels_collapse_record_ids():
-    assert route_label('/api/v1/products/2f1c9a4e-1b2c-4d5e-8a9b-0c1d2e3f4a5b/evidence') == \
-        '/api/v1/products/:id/evidence'
-    assert route_label('/api/v1/products') == '/api/v1/products'
+class StubRoute:
+    """Stands in for the router's matched route, which carries the template."""
+    def __init__(self, path):
+        self.path = path
+
+
+def test_a_label_is_the_matched_template_and_never_the_raw_path():
+    """Review finding F05: only the router may name a label."""
+    matched = StubRoute('/api/v1/products/{product_id}/evidence')
+    assert route_label('/api/v1/products/2f1c9a4e-1b2c-4d5e/evidence', matched) == \
+        '/api/v1/products/{product_id}/evidence'
+    # No matched route: the path is whatever the caller typed, so it cannot be a label.
+    assert route_label('/api/v1/products/2f1c9a4e-1b2c-4d5e/evidence') == UNMATCHED_LABEL
+    assert route_label('/api/v1/products', None) == UNMATCHED_LABEL
+    assert route_label('/anything at all $(marker)') == UNMATCHED_LABEL
+
+
+def test_requests_rejected_before_routing_share_one_safe_label(client, owner):
+    before = set(client.app.state.counters.requests)
+    for index in range(20):
+        response = client.post(f'/api/private-marker-{index}')
+        assert response.status_code == 403
+    labels = set(client.app.state.counters.requests) - before
+    assert labels == {'POST <unmatched>'}
+    assert not any('private-marker' in label for label in client.app.state.counters.requests)
+
+
+def test_every_workspace_read_requires_the_read_permission(client, owner, app):
+    """Review finding E04: `workspace.read` was declared, granted, and checked nowhere.
+
+    Every read route depended on a session alone, so a role holding no permissions at all
+    still read the whole workspace. The matrix advertised a control that did not exist.
+    """
+    from app.db import User
+    product = client.post('/api/v1/xray', json={'input': AMAZON},
+                          headers={**HEADERS, 'Idempotency-Key': 'e04'}).json()['product_id']
+    paths = ['/api/v1/products', f'/api/v1/products/{product}',
+             f'/api/v1/products/{product}/evidence', f'/api/v1/products/{product}/timeline',
+             f'/api/v1/products/{product}/compliance', '/api/v1/decisions',
+             '/api/v1/quotes', '/api/v1/watchlists/default/items',
+             '/api/v1/summary', '/api/v1/alerts']
+    for path in paths:
+        assert client.get(path).status_code == 200, path
+
+    with app.state.database.session() as db:
+        db.query(User).filter_by(id=owner['id']).update({'role': 'no-permissions'})
+        db.commit()
+    for path in paths:
+        assert client.get(path).status_code == 403, f'{path} is readable without workspace.read'
+    # The person's own account is not workspace data and must still answer.
+    assert client.get('/api/v1/auth/me').status_code == 200
 
 
 def test_metrics_count_requests_errors_and_rate_limits_without_workspace_data(client, owner):
@@ -242,11 +289,15 @@ def test_labels_come_from_the_matched_route_template(client, owner, product):
 
 
 def test_the_label_set_is_bounded(client, owner):
-    """Even a route that legitimately varies cannot grow the set without limit."""
+    """The bound is defence in depth behind the template rule.
+
+    Templates come from our own router, so the vocabulary is already finite. This asserts
+    the cap still holds if a future router ever offered more templates than the bound.
+    """
     from app.observability import MAX_LABELS, OVERFLOW_LABEL, Counters
     counters = Counters()
     for index in range(MAX_LABELS + 50):
-        counters.record('GET', f'/synthetic/{index}', 200, 1.0)
+        counters.record('GET', '/ignored', 200, 1.0, StubRoute(f'/synthetic/{index}'))
     assert len(counters.requests) <= MAX_LABELS + 1
     assert counters.requests[OVERFLOW_LABEL] >= 50
 

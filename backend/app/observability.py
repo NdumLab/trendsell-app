@@ -22,9 +22,6 @@ WORKSPACE_ID: ContextVar[str] = ContextVar('workspace_id', default='-')
 USER_ID: ContextVar[str] = ContextVar('user_id', default='-')
 
 SAFE_REQUEST_ID = re.compile(r'^[A-Za-z0-9._-]{8,64}$')
-#: Path segments that are ids get collapsed, so one route is one label rather than one
-#: label per record — and so no identifier leaks into a metric name.
-ID_SEGMENT = re.compile(r'^[0-9a-fA-F-]{16,}$')
 
 
 def request_id():
@@ -77,16 +74,13 @@ def route_label(path, route=None):
     lifetime. Twenty unknown paths produced twenty permanent labels.
 
     A matched route already has a bounded template (`/api/v1/products/{product_id}`), and
-    the router hands it to the middleware, so the template is the label. A request that
-    matched nothing gets one shared label: it is not a route, and its path is whatever the
-    caller typed. The segment-collapsing fallback stays only for callers with no route.
+    the router hands it to the middleware, so the template is the label. Everything else
+    is one shared label. `path` is accepted so a caller reads naturally and so the two
+    arguments stay together, but it is deliberately never used to build a label: a
+    request rejected before routing — a CSRF failure, an unknown path — has no template,
+    and its path is whatever the caller typed (review finding F05).
     """
-    template = getattr(route, 'path', None)
-    if template:
-        return template
-    if route is None and path is not None:
-        return '/'.join(':id' if ID_SEGMENT.match(segment) else segment for segment in path.split('/'))
-    return UNMATCHED_LABEL
+    return getattr(route, 'path', None) or UNMATCHED_LABEL
 
 
 class Counters:

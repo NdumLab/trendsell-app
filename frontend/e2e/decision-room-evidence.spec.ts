@@ -52,6 +52,41 @@ test.describe('decision room reads recorded evidence', () => {
     expect(workspace.workspace).toBe('E2E workspace');
   });
 
+  test('a failed evidence read pauses drafts until the authoritative reading recovers', async ({ page, workspace }) => {
+    const productId = await apiProduct(page, asin(66), 'Temporarily unavailable candidate');
+    await recordFullCoverage(page, productId);
+    let unavailable = true;
+    await page.route(`**/api/v1/products/${productId}`, async route => {
+      if (unavailable) await route.fulfill({ status: 503, contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Temporary test outage' }) });
+      else await route.continue();
+    });
+    await page.goto(`/decisions?product=${productId}`);
+    await fillDecisionInputs(page);
+    await expect(page.getByText(/Draft calculation, saving and export are paused/)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save this decision' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Export this draft' })).toHaveCount(0);
+
+    unavailable = false;
+    await page.getByRole('button', { name: 'Retry evidence' }).click();
+    const draft = await downloadJson(page, () =>
+      page.getByRole('button', { name: 'Export this draft' }).click());
+    expect(draft.body.assessment.confidence).toBe(60);
+    expect(draft.body.evidence).toHaveLength(4);
+
+    // The independent review's own specimen: once the authoritative reading is back, the
+    // draft and the saved assessment must agree exactly — the contradiction it caught was
+    // draft 0/NO_EVIDENCE against saved 60/WATCH on identical commercial inputs.
+    await page.getByRole('button', { name: 'Save this decision' }).click();
+    await expect(page.getByText(/That assessment is immutable/)).toBeVisible();
+    const saved = await downloadJson(page, () =>
+      page.getByRole('button', { name: 'Export saved assessment' }).click());
+    expect(draft.body.assessment.confidence).toBe(saved.body.assessment.confidence);
+    expect(draft.body.assessment.decision).toBe(saved.body.assessment.decision);
+    expect(draft.body.evidence).toHaveLength(saved.body.evidence.length);
+    expect(workspace.workspace).toBe('E2E workspace');
+  });
+
   test('a product on the first page gets its evidence, not only a linked one', async ({ page, workspace }) => {
     // The exact shape of the regression: nothing here is past a page boundary.
     const productId = await apiProduct(page, asin(63), 'First page candidate');

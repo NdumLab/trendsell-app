@@ -27,6 +27,9 @@ class User(Base):
     name = Column(String, nullable=False)
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False, default='owner')
+    # Null means this installation has not yet proved control of the address. Existing
+    # users are deliberately not grandfathered as verified by the migration.
+    email_verified_at = Column(String)
 
 class Session(Base):
     __tablename__ = 'sessions'

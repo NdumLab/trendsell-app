@@ -19,7 +19,8 @@ Nothing here generates a rate, a code or a requirement. A candidate HS code stay
 candidate until a qualified person reviews it, and every rule carries the source it came
 from. Software acceptance does not establish classification correctness; the reviewer does.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -86,6 +87,19 @@ class RuleSource(BaseModel):
         return self
 
 
+#: The classification shapes this pilot accepts: 4-10 bare digits, or a dotted heading
+#: (`8451.30`, `8451.30.00`). Review finding F04: the previous check only asked whether
+#: every character was a digit or a dot, so `.` and `....` were accepted as classifications
+#: and cleared the gate. Accepting a shape is not accepting a classification — a reviewer
+#: still decides whether the code is the right one.
+HS_CODE = re.compile(r'^(?:\d{4,10}|\d{4}(?:\.\d{2}){1,3})$')
+
+
+def valid_hs_code(value):
+    """Whether `value` is one of the documented classification shapes."""
+    return bool(value and HS_CODE.fullmatch(value.strip()))
+
+
 class ReviewDecision(BaseModel):
     """A reviewer's answer. An approval must cite what it rests on."""
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
@@ -124,17 +138,33 @@ class ReviewDecision(BaseModel):
     @field_validator('hs_code')
     @classmethod
     def digits_and_dots_only(cls, value):
-        if value and not all(character.isdigit() or character == '.' for character in value):
-            raise ValueError('An HS code is digits, optionally separated by dots.')
+        if value and not valid_hs_code(value):
+            raise ValueError('An HS code must contain 4–10 digits, optionally grouped as 8451.30.00.')
         return value
 
 
 def source_is_in_force(source, moment):
     """Whether one cited publication is in force on `moment` (a date string)."""
-    if source.get('effective_from', '') > moment:
+    try:
+        starts = date.fromisoformat(source.get('effective_from', ''))
+        today = date.fromisoformat(moment)
+        ends = date.fromisoformat(source['effective_to']) if source.get('effective_to') else None
+    except (TypeError, ValueError):
+        return False
+    if starts > today:
         return False                              # not yet in force
-    ends = source.get('effective_to')
-    return not ends or ends >= moment             # inclusive of its final day
+    return not ends or ends >= today              # inclusive of its final day
+
+
+def approval_determination_complete(review):
+    """Whether an approval records an actual classification and requirements finding.
+
+    This is checked on reads as well as writes because releases before R03 allowed an
+    incomplete approval to be stored. Historical assessments remain immutable; only the
+    current gate stops trusting that legacy record.
+    """
+    return (valid_hs_code(review.get('hs_code', '')) and
+            bool(review.get('requirements') or review.get('no_additional_requirements')))
 
 
 def sources_in_force(sources, now=None):
@@ -168,6 +198,8 @@ def approval_is_current(review, now=None):
     """
     if not review or review.get('status') != 'approved' or review.get('superseded_by'):
         return False
+    if not approval_determination_complete(review):
+        return False
     expires = review.get('expires_at')
     if not (expires and expires > (now or datetime.now(timezone.utc)).isoformat()):
         return False
@@ -192,6 +224,11 @@ def approval_expiry(validity_days, sources, now=None):
     return min(horizon, f'{min(ends)}T23:59:59.999999+00:00')
 
 
+#: Statuses that represent a reviewer's actual answer, as opposed to a question waiting
+#: for one. Only these decide the gate (review finding E03).
+DECIDED_STATUSES = {'approved', 'rejected', 'more_information'}
+
+
 def gate_state(review, now=None):
     """How the compliance gate reads, and why — for a screen and for an assessment."""
     if not review:
@@ -203,6 +240,18 @@ def gate_state(review, now=None):
                 'reason': f'Approved by a reviewer on {review["decided_at"][:10]}, valid to {review["expires_at"][:10]}.',
                 'review_id': review.get('id'), 'expires_at': review.get('expires_at'),
                 'hs_code': review.get('hs_code'), 'requirements': review.get('requirements', [])}
+    if status == 'approved' and review.get('superseded_by'):
+        # Requesting another review replaces the standing approval. Deliberately
+        # asymmetric with a rejection, which keeps standing (E03): asking the question
+        # again can hold or worsen the gate, never improve it. Saying "expired" here --
+        # as this did -- names the wrong cause and a date that has not passed.
+        return {'resolved': False, 'status': 'superseded', 'review_id': review.get('id'),
+                'reason': 'This approval was replaced when a new review was requested. '
+                          'It resolves nothing until that review is decided.'}
+    if status == 'approved' and not approval_determination_complete(review):
+        return {'resolved': False, 'status': 'review_incomplete', 'review_id': review.get('id'),
+                'reason': 'This older approval does not record a valid classification and an explicit '
+                          'requirements determination. Request a new review.'}
     if status == 'approved' and not sources_in_force(review.get('sources'), now):
         return {'resolved': False, 'status': 'support_expired', 'review_id': review.get('id'),
                 'reason': 'Every source this approval cites has expired or is not yet in force. '

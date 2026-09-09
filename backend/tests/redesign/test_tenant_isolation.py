@@ -35,8 +35,16 @@ def workspace(client, owner):
     quote = client.post('/api/v1/quotes', json={**QUOTE, 'product_id': product_id}, headers=HEADERS).json()
     watch = client.post('/api/v1/watchlists/default/items', json={'product_id': product_id, 'threshold_pct': 15},
                         headers=HEADERS).json()
+    evidence = client.post(f'/api/v1/products/{product_id}/evidence', headers=HEADERS, json={
+        'metric': 'Search interest', 'market': 'US', 'value': 42, 'unit': 'index / 100',
+        'observed_at': '2026-09-01', 'source_name': 'Search trends export',
+        'method': 'Disposable manually entered test fixture.'}).json()
+    review = client.post(f'/api/v1/products/{product_id}/compliance/requests', headers=HEADERS, json={
+        'product_id': product_id, 'specifications': 'Steam output 1200W, plastic housing',
+        'intended_use': 'Retail resale', 'question': 'What classification applies?'}).json()
     return {'product': product_id, 'job': job['id'], 'decision': decision['id'],
-            'quote': quote['id'], 'watch': watch['id']}
+            'quote': quote['id'], 'watch': watch['id'],
+            'evidence': evidence['id'], 'review': review['id']}
 
 
 @pytest.fixture
@@ -105,6 +113,46 @@ def test_a_stranger_cannot_write_to_another_workspaces_records(client, workspace
     assert after == before
     assert after['product']['name'] == 'Portable garment steamer'
     assert after['watches']['items'][0]['threshold_pct'] == 15
+
+
+def test_a_stranger_cannot_reach_another_workspaces_evidence_or_review(client, workspace,
+                                                                        second_client, stranger):
+    """The evidence and import-readiness routes, which this module predates.
+
+    A review decision is the one write in the product that can resolve a compliance gate,
+    so a stranger reaching it would be the most serious isolation failure available.
+    """
+    before = snapshot(client, workspace)
+    reads = [f'/api/v1/products/{workspace["product"]}/compliance']
+    for path in reads:
+        assert second_client.get(path).status_code == 404, path
+
+    writes = [
+        ('post', f'/api/v1/products/{workspace["product"]}/evidence',
+         {'metric': 'Search interest', 'market': 'US', 'value': 999, 'unit': 'index / 100',
+          'observed_at': '2026-09-02', 'source_name': 'Injected by a stranger',
+          'method': 'Written by another workspace during the isolation test.'}),
+        ('post', f'/api/v1/products/{workspace["product"]}/compliance/requests',
+         {'product_id': workspace['product'], 'specifications': 'Stranger specification',
+          'intended_use': 'Stranger use', 'question': 'Filed by another workspace?'}),
+        ('post', f'/api/v1/compliance/reviews/{workspace["review"]}/decision',
+         {'status': 'approved', 'rationale': 'Approved by another workspace entirely.',
+          'hs_code': '8451.30', 'no_additional_requirements': True,
+          'sources': [{'title': 'Stranger source title', 'publisher': 'Stranger publisher',
+                       'url': 'https://example.com/source', 'effective_from': '2020-01-01'}]}),
+    ]
+    for method, path, body in writes:
+        response = getattr(second_client, method)(path, json=body, headers=HEADERS)
+        assert response.status_code == 404, (path, response.status_code, response.text)
+    assert second_client.delete(
+        f'/api/v1/products/{workspace["product"]}/evidence/{workspace["evidence"]}',
+        headers=HEADERS).status_code == 404
+
+    # The gate the stranger tried to resolve is untouched, and so is everything else.
+    gate = client.get(f'/api/v1/products/{workspace["product"]}/compliance').json()
+    assert gate['gate']['resolved'] is False and gate['gate']['status'] == 'requested'
+    assert len(client.get(f'/api/v1/products/{workspace["product"]}/evidence').json()['observations']) == 1
+    assert snapshot(client, workspace) == before
 
 
 def test_an_idempotency_key_is_scoped_to_its_workspace(client, workspace, second_client, stranger):

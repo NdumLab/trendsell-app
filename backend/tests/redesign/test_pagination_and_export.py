@@ -297,13 +297,18 @@ def test_the_export_carries_superseded_reviews_and_their_sources(client, researc
 
 
 def test_a_saved_decision_resolves_its_review_reference_inside_the_export(client, researched):
-    """`compliance_review_id` has to name a record the export actually contains."""
+    """`compliance_review_id` has to name a record the export actually contains.
+
+    It names the review that *governed* the gate, which is the last one a reviewer
+    decided — not the later request still waiting for one (review finding E03). The
+    fixture decided the first review and then asked again, so the first is the reference.
+    """
     client.post('/api/v1/decisions',
                 json={'product_id': researched['product_id'], 'inputs': INPUTS},
                 headers={**HEADERS, 'Idempotency-Key': 'r05d'})
     body = json.loads(client.get('/api/v1/export').text)
     referenced = body['decisions'][0]['compliance_review_id']
-    assert referenced == researched['second_review']
+    assert referenced == researched['first_review']
     assert referenced in {review['id'] for review in body['compliance_reviews']}
 
 

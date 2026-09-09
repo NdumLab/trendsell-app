@@ -9,11 +9,11 @@ from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response, B
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict, HttpUrl, StringConstraints, TypeAdapter, field_validator
-from sqlalchemy import text
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 from . import migrate
 from .settings import Settings
-from .db import Database, Workspace, User, Session, RecoveryToken, Record, records, audit, now, uid
+from .db import Database, Workspace, User, Session, RecoveryToken, Record, Audit, RateBucket, records, audit, now, uid
 from .security import dummy_verify, hash_password, verify_password, token_hash, consume, purge_expired, resolve_input
 from .limits import BodyLimit, MAX_BODY_BYTES
 from .observability import Counters, REQUEST_ID, USER_ID, WORKSPACE_ID, logger, new_request_id, route_label
@@ -85,6 +85,13 @@ class PasswordChange(StrictModel):
     must not be enough to lock the owner out of their own account."""
     current_password: Password
     new_password: Password
+
+class VerificationConfirm(StrictModel):
+    token: Annotated[str, StringConstraints(strip_whitespace=False, min_length=20, max_length=200)]
+
+class AccountDeletion(StrictModel):
+    password: Password
+    confirmation: str = Field(min_length=8, max_length=200)
 
 class XrayRequest(StrictModel):
     input: str = Field(min_length=10, max_length=2048)
@@ -354,7 +361,9 @@ def create_app(settings=None):
         return row, True
 
     def user_view(user):
-        return {'id':user.id, 'name':user.name, 'email':user.email, 'workspace_id':user.workspace_id, 'role':user.role}
+        return {'id':user.id, 'name':user.name, 'email':user.email, 'workspace_id':user.workspace_id,
+                'role':user.role, 'email_verified':bool(user.email_verified_at),
+                'email_verified_at':user.email_verified_at}
 
     def start_session(db, user, response, request=None):
         token = secrets.token_urlsafe(48)
@@ -431,7 +440,9 @@ def create_app(settings=None):
 
     @app.get('/api/v1/config')
     def config():
-        return {'allow_registration':settings.allow_registration, 'destination':'NG', 'demo':False, 'research_daily_limit':settings.research_daily_limit}
+        return {'allow_registration':settings.allow_registration, 'destination':'NG', 'demo':False,
+                'research_daily_limit':settings.research_daily_limit,
+                'mail_delivery_configured':mailer.configured}
 
     @app.post('/api/v1/auth/register', status_code=201)
     def register(payload: Credentials, request: Request, response: Response, db=Depends(get_db)):
@@ -447,7 +458,16 @@ def create_app(settings=None):
         except IntegrityError:
             db.rollback()
             raise HTTPException(409, 'Unable to register this email. Try signing in.')
-        return start_session(db, user, response, request)
+        view = start_session(db, user, response, request)
+        if mailer.configured:
+            # The account exists and is committed. A transport failure here must not undo
+            # a registration that succeeded; the person can ask for the link again.
+            try:
+                send_verification(db, user)
+            except mail.MailNotConfigured:
+                logger.warning('verification mail undelivered',
+                               extra={'context': {'purpose': EMAIL_PURPOSE}})
+        return view
 
     @app.post('/api/v1/auth/login')
     def login(payload: Credentials, request: Request, response: Response, db=Depends(get_db)):
@@ -501,6 +521,8 @@ def create_app(settings=None):
     #: Short, because a reset link is a bearer credential sitting in an inbox.
     RESET_TTL_MINUTES = 30
     RESET_PURPOSE = 'password_reset'
+    EMAIL_TTL_HOURS = 24
+    EMAIL_PURPOSE = 'email_verification'
 
     def client_label(request):
         """A short, non-identifying hint so a person can recognise their own session."""
@@ -509,18 +531,38 @@ def create_app(settings=None):
         agent = (request.headers.get('user-agent') or '').strip()
         return agent[:120] or None
 
-    def issue_reset(db, user):
-        """Mint a single-use reset token and return the secret exactly once."""
+    def issue_token(db, user, purpose, expires_at):
+        """Mint one credential after invalidating older ones for the same purpose."""
+        # Every operation that can change account credentials locks this one stable row
+        # first. PostgreSQL then gives reset issuance, redemption and password changes a
+        # single order. SQLite serializes writes itself; the same code remains portable.
+        user = db.execute(select(User).where(User.id == user.id).with_for_update()).scalar_one()
         # Any outstanding token is spent: asking for a new link invalidates the old one,
         # so a forwarded or leaked earlier mail stops working.
-        db.query(RecoveryToken).filter_by(user_id=user.id, purpose=RESET_PURPOSE,
+        db.query(RecoveryToken).filter_by(user_id=user.id, purpose=purpose,
                                           used_at=None).update({'used_at': now()})
         token = secrets.token_urlsafe(32)
         db.add(RecoveryToken(
-            token_hash=token_hash(token), user_id=user.id, purpose=RESET_PURPOSE,
-            expires_at=(datetime.now(timezone.utc) + timedelta(minutes=RESET_TTL_MINUTES)).isoformat(),
+            token_hash=token_hash(token), user_id=user.id, purpose=purpose,
+            expires_at=expires_at,
             created_at=now()))
         return token
+
+    def issue_reset(db, user):
+        return issue_token(db, user, RESET_PURPOSE,
+                           (datetime.now(timezone.utc) + timedelta(minutes=RESET_TTL_MINUTES)).isoformat())
+
+    def send_verification(db, user):
+        """Create and deliver a verification credential through the configured transport."""
+        token = issue_token(db, user, EMAIL_PURPOSE,
+                            (datetime.now(timezone.utc) + timedelta(hours=EMAIL_TTL_HOURS)).isoformat())
+        audit(db, user, 'auth.email_verification_requested')
+        db.commit()
+        mailer.send(mail.Message(
+            to=user.email, purpose=EMAIL_PURPOSE, subject='Verify your TrendSell email',
+            body=('Verify that you control this address for your TrendSell workspace.\n\n'
+                  f'Verification token: {token}\n\n'
+                  f'It can be used once, and expires in {EMAIL_TTL_HOURS} hours.')))
 
     def revoke_sessions(db, user, keep=None):
         """End every session for this user, optionally sparing the one in hand."""
@@ -573,16 +615,35 @@ def create_app(settings=None):
     @app.post('/api/v1/auth/recovery/reset')
     def reset_password(payload: PasswordReset, db=Depends(get_db)):
         """Redeem a reset token, then end every session the account had."""
-        row = db.get(RecoveryToken, token_hash(payload.token))
+        digest = token_hash(payload.token)
+        row = db.get(RecoveryToken, digest)
         # One message for every failure mode: expired, already used, wrong purpose, or
         # never existed. Distinguishing them tells an attacker which guess was close.
         if not row or row.used_at or row.purpose != RESET_PURPOSE or row.expires_at <= now():
             raise HTTPException(400, 'This reset link is no longer valid. Request a new one.')
-        user = db.get(User, row.user_id)
+        # Read the token only to find the account, then serialize all security changes on
+        # that account before atomically claiming this particular credential.
+        user = db.execute(select(User).where(User.id == row.user_id).with_for_update()).scalar_one_or_none()
         if not user:
             raise HTTPException(400, 'This reset link is no longer valid. Request a new one.')
-        row.used_at = now()
+        changed_at = now()
+        claimed = db.execute(
+            update(RecoveryToken)
+            .where(RecoveryToken.token_hash == digest,
+                   RecoveryToken.user_id == user.id,
+                   RecoveryToken.purpose == RESET_PURPOSE,
+                   RecoveryToken.used_at.is_(None),
+                   RecoveryToken.expires_at > changed_at)
+            .values(used_at=changed_at))
+        if claimed.rowcount != 1:
+            db.rollback()
+            raise HTTPException(400, 'This reset link is no longer valid. Request a new one.')
         user.password_hash = hash_password(payload.password)
+        user.email_verified_at = user.email_verified_at or changed_at
+        # A successful security change invalidates every other recovery credential.
+        db.query(RecoveryToken).filter(RecoveryToken.user_id == user.id,
+                                       RecoveryToken.used_at.is_(None)).update(
+                                           {'used_at': changed_at}, synchronize_session=False)
         # Whoever prompted the reset may be holding a stolen session. Ending all of them,
         # including this browser's, is the point of a reset.
         revoked = revoke_sessions(db, user)
@@ -590,15 +651,57 @@ def create_app(settings=None):
         db.commit()
         return {'status': 'password_reset', 'sessions_revoked': revoked}
 
+    @app.post('/api/v1/auth/email-verification/request', status_code=202)
+    def request_email_verification(request: Request, user=Depends(current_user), db=Depends(get_db)):
+        if user.email_verified_at:
+            return {'status': 'already_verified', 'delivery_configured': mailer.configured}
+        consume(db, f'verify-ip:{request.client.host}:{now()[:13]}', settings.register_ip_hourly_limit,
+                message='Too many verification requests from this address. Try again later.')
+        consume(db, f'verify-account:{user.id}:{now()[:13]}', settings.login_account_hourly_limit,
+                message='Too many verification requests. Check your inbox, or try again later.')
+        if mailer.configured:
+            try:
+                send_verification(db, user)
+            except mail.MailNotConfigured:
+                logger.warning('verification mail undelivered',
+                               extra={'context': {'purpose': EMAIL_PURPOSE}})
+        return {'status': 'accepted', 'delivery_configured': mailer.configured}
+
+    @app.post('/api/v1/auth/email-verification/confirm')
+    def confirm_email(payload: VerificationConfirm, db=Depends(get_db)):
+        digest = token_hash(payload.token)
+        credential = db.get(RecoveryToken, digest)
+        if not credential or credential.used_at or credential.purpose != EMAIL_PURPOSE or credential.expires_at <= now():
+            raise HTTPException(400, 'This verification link is no longer valid. Request a new one.')
+        user = db.execute(select(User).where(User.id == credential.user_id).with_for_update()).scalar_one_or_none()
+        if not user:
+            raise HTTPException(400, 'This verification link is no longer valid. Request a new one.')
+        verified_at = now()
+        claimed = db.execute(update(RecoveryToken).where(
+            RecoveryToken.token_hash == digest, RecoveryToken.user_id == user.id,
+            RecoveryToken.purpose == EMAIL_PURPOSE, RecoveryToken.used_at.is_(None),
+            RecoveryToken.expires_at > verified_at).values(used_at=verified_at))
+        if claimed.rowcount != 1:
+            db.rollback()
+            raise HTTPException(400, 'This verification link is no longer valid. Request a new one.')
+        user.email_verified_at = verified_at
+        audit(db, user, 'auth.email_verified')
+        db.commit()
+        return {'status': 'email_verified', 'email_verified_at': verified_at}
+
     @app.post('/api/v1/auth/password')
     def change_password(payload: PasswordChange, request: Request, user=Depends(current_user), db=Depends(get_db)):
         """Change a password while signed in, keeping only the session doing it."""
+        user = db.execute(select(User).where(User.id == user.id).with_for_update()).scalar_one()
         ok, _ = verify_password(payload.current_password, user.password_hash)
         if not ok:
             raise HTTPException(403, 'Current password is incorrect.')
         if payload.new_password == payload.current_password:
             raise HTTPException(400, 'The new password must be different from the current one.')
         user.password_hash = hash_password(payload.new_password)
+        db.query(RecoveryToken).filter(RecoveryToken.user_id == user.id,
+                                       RecoveryToken.used_at.is_(None)).update(
+                                           {'used_at': now()}, synchronize_session=False)
         current = token_hash(request.cookies.get('trendsell_session', ''))
         revoked = revoke_sessions(db, user, keep=current)
         audit(db, user, 'auth.password_changed', detail={'sessions_revoked': revoked})
@@ -638,18 +741,50 @@ def create_app(settings=None):
         db.commit()
         return {'status': 'revoked', 'was_current': was_current}
 
+    @app.delete('/api/v1/auth/account')
+    def delete_account(payload: AccountDeletion, response: Response, user=Depends(current_user), db=Depends(get_db)):
+        """Delete this one-person pilot workspace after password and phrase confirmation."""
+        user = db.execute(select(User).where(User.id == user.id).with_for_update()).scalar_one()
+        ok, _ = verify_password(payload.password, user.password_hash)
+        if not ok:
+            raise HTTPException(403, 'Password is incorrect.')
+        workspace = db.get(Workspace, user.workspace_id)
+        expected = f'DELETE {workspace.name}'
+        if payload.confirmation != expected:
+            raise HTTPException(422, f'Type {expected} exactly to delete this workspace.')
+        workspace_id, user_id, email = user.workspace_id, user.id, user.email
+        # Registration is the only way an account exists today, so a workspace holds one
+        # person. Membership is planned (see permissions.py), and a second member's rows
+        # are not this person's to erase — refuse rather than orphan or half-delete them.
+        others = db.query(User).filter(User.workspace_id == workspace_id, User.id != user_id).count()
+        if others:
+            raise HTTPException(409, 'This workspace has other members. Deleting a shared '
+                                     'workspace is not supported yet.')
+        db.query(Record).filter_by(workspace_id=workspace_id).delete(synchronize_session=False)
+        db.query(Audit).filter_by(workspace_id=workspace_id).delete(synchronize_session=False)
+        db.query(Session).filter_by(user_id=user_id).delete(synchronize_session=False)
+        db.query(RecoveryToken).filter_by(user_id=user_id).delete(synchronize_session=False)
+        db.query(RateBucket).filter(RateBucket.key.like(f'%{workspace_id}%')).delete(synchronize_session=False)
+        db.query(RateBucket).filter(RateBucket.key.like(f'%{token_hash(email)}%')).delete(synchronize_session=False)
+        db.delete(user)
+        db.delete(workspace)
+        db.commit()
+        response.delete_cookie('trendsell_session', path='/api')
+        logger.info('workspace deleted', extra={'context': {'records_retained': 0}})
+        return {'status': 'deleted'}
+
     @app.get('/api/v1/data-health')
     def data_health():
         return {'sources':[{**s,'status':'unconfigured','last_success':None,'last_attempt':None,'next_retry':'After connection and source review','freshness_hours':24} for s in SOURCES], 'market':'NG', 'coverage':None, 'truth_state':'Unavailable'}
 
     @app.get('/api/v1/products')
     def products(search: str = Query(default='', max_length=200), limit: int = DEFAULT_LIMIT,
-                 cursor: str | None = None, user=Depends(current_user), db=Depends(get_db)):
+                 cursor: str | None = None, user=Depends(permitted('workspace.read')), db=Depends(get_db)):
         rows, page = paginate(searched(records(db,user,'product'), search, ['name','asin']), limit, cursor)
         return {'products':with_latest_assessment(db,user,rows), **page}
 
     @app.get('/api/v1/products/{product_id}')
-    def product(product_id: str, user=Depends(current_user), db=Depends(get_db)):
+    def product(product_id: str, user=Depends(permitted('workspace.read')), db=Depends(get_db)):
         body = with_latest_assessment(db,user,[owned(db,user,'product',product_id)])[0]
         reading, gate, _ = evidence_gate(db,user,product_id)
         # Evidence status is derived from the records, never stored as an opinion (D03).
@@ -665,12 +800,46 @@ def create_app(settings=None):
                 .order_by(Record.created_at.asc()).all())
         return [serialize(row) for row in rows]
 
-    def latest_review(db, user, product_id):
-        """The newest import-readiness review for one product, or None."""
+    def product_reviews(db, user, product_id):
+        """Every import-readiness review for one product, oldest first."""
         rows = (records(db,user,'compliance_review')
                 .filter(Record.payload['product_id'].as_string() == product_id)
                 .order_by(Record.created_at.asc()).all())
-        return serialize(rows[-1]) if rows else None
+        return [serialize(row) for row in rows]
+
+    def latest_review(db, user, product_id):
+        """The newest review record of any status — including one still waiting."""
+        rows = product_reviews(db, user, product_id)
+        return rows[-1] if rows else None
+
+    def governing_review(db, user, product_id):
+        """The review that decides the gate: the newest one a reviewer actually decided.
+
+        Review finding E03: the gate read the newest review record *of any status*, so
+        merely asking for another review outranked a decision. Anyone holding
+        `workspace.write` could therefore erase a reviewer's rejection from every later
+        assessment — the gate fell back to `requested` and the "a reviewer rejected this
+        product" blocker disappeared — without any reviewer involved.
+
+        A pending request is a question, not an answer. The last answer stands until a
+        reviewer gives a new one; `compliance_state` still shows the pending request
+        alongside it, so nothing is hidden.
+        """
+        decided = [review for review in product_reviews(db, user, product_id)
+                   if review.get('status') in cmp.DECIDED_STATUSES]
+        return decided[-1] if decided else None
+
+    def gate_review(db, user, product_id):
+        """What the gate is computed from, and whether a re-review is waiting.
+
+        With no decision yet the pending request is itself the state to report, so a
+        product whose first review is still open reads `requested` rather than `none`.
+        """
+        latest = latest_review(db, user, product_id)
+        governing = governing_review(db, user, product_id)
+        pending = bool(latest and latest.get('status') == 'requested'
+                       and (not governing or governing['id'] != latest['id']))
+        return (governing or latest), pending
 
     def evidence_gate(db, user, product_id):
         """The gate inputs, computed on the server from stored records (action plan D03).
@@ -678,8 +847,11 @@ def create_app(settings=None):
         Nothing a client sends can raise confidence, assert coverage, or resolve
         compliance: each comes from records this workspace actually holds.
         """
-        review = latest_review(db, user, product_id)
+        review, re_review_pending = gate_review(db, user, product_id)
         gate = cmp.gate_state(review)
+        if re_review_pending:
+            # Visible, but not in charge: the standing decision still governs (E03).
+            gate = {**gate, 're_review_pending': True}
         reading = quality(evidence_records(db, user, product_id), gate['resolved'])
         # The reviewed state itself, not merely whether it resolved the gate. A rejection
         # is authoritative and decides the assessment; under the previous thresholds it
@@ -689,7 +861,7 @@ def create_app(settings=None):
 
     @app.get('/api/v1/products/{product_id}/evidence')
     @app.get('/api/v1/products/{product_id}/timeline')
-    def evidence(product_id: str, user=Depends(current_user), db=Depends(get_db)):
+    def evidence(product_id: str, user=Depends(permitted('workspace.read')), db=Depends(get_db)):
         owned(db,user,'product',product_id)
         stored = evidence_records(db,user,product_id)
         reading, gate, _ = evidence_gate(db,user,product_id)
@@ -739,14 +911,16 @@ def create_app(settings=None):
     # --- Import-readiness review (action plan N02, N03) ---------------------------
 
     @app.get('/api/v1/products/{product_id}/compliance')
-    def compliance_state(product_id: str, user=Depends(current_user), db=Depends(get_db)):
+    def compliance_state(product_id: str, user=Depends(permitted('workspace.read')), db=Depends(get_db)):
         owned(db,user,'product',product_id)
-        review = latest_review(db,user,product_id)
-        history = [serialize(row) for row in
-                   records(db,user,'compliance_review')
-                   .filter(Record.payload['product_id'].as_string() == product_id)
-                   .order_by(Record.created_at.desc()).all()]
-        return {'gate': cmp.gate_state(review), 'current': review, 'history': history,
+        review, re_review_pending = gate_review(db,user,product_id)
+        gate = cmp.gate_state(review)
+        if re_review_pending:
+            gate = {**gate, 're_review_pending': True}
+        history = list(reversed(product_reviews(db,user,product_id)))
+        # `current` is the newest record, so a request waiting for a reviewer is still
+        # shown as such even while an earlier decision governs the gate (E03).
+        return {'gate': gate, 'current': latest_review(db,user,product_id), 'history': history,
                 'can_review': permissions_granted(user, 'compliance.review'),
                 'review_version': cmp.REVIEW_VERSION}
 
@@ -776,8 +950,27 @@ def create_app(settings=None):
     @app.post('/api/v1/compliance/reviews/{review_id}/decision')
     def decide_review(review_id: str, payload: cmp.ReviewDecision,
                       user=Depends(permitted('compliance.review')), db=Depends(get_db)):
-        """A reviewer's decision. Only this permission can resolve the compliance gate."""
-        row = owned(db,user,'compliance_review',review_id)
+        """A reviewer's decision. Only this permission can resolve the compliance gate.
+
+        The review row is locked before its status is read. Without the lock two decisions
+        submitted at the same moment -- two reviewers, or one double submission -- both saw
+        `requested`, both returned 200, and the later commit silently replaced the earlier
+        decision: a rejection could be overwritten by an approval that then resolved the
+        gate, leaving two `compliance.reviewed` events on one review. A decision is the
+        one thing in this product that must not be lost to a race.
+        """
+        # The lock IS the read: fetching the row first and locking it afterwards would let
+        # the ORM hand back the already-loaded (pre-lock) instance, so the status check
+        # could still run against a stale payload. The workspace filter keeps this the
+        # same 404 another workspace has always received.
+        row = db.execute(select(Record)
+                         .where(Record.id == review_id,
+                                Record.workspace_id == user.workspace_id,
+                                Record.kind == 'compliance_review')
+                         .with_for_update()
+                         .execution_options(populate_existing=True)).scalar_one_or_none()
+        if not row:
+            raise HTTPException(404, 'Record not found in this workspace.')
         if row.payload['status'] != 'requested':
             raise HTTPException(409, 'This review has already been decided. Request a new review instead.')
         sources = [source.model_dump() for source in payload.sources]
@@ -848,11 +1041,11 @@ def create_app(settings=None):
         return queue_job(XrayRequest(input=product.payload['asin']),db,user,background,idempotency_key or uid())
 
     @app.get('/api/v1/research-jobs/{job_id}')
-    def job(job_id:str, user=Depends(current_user), db=Depends(get_db)):
+    def job(job_id:str, user=Depends(permitted('workspace.read')), db=Depends(get_db)):
         return serialize(owned(db,user,'job',job_id))
 
     @app.get('/api/v1/research-jobs/{job_id}/events')
-    def events(job_id:str, last_event_id:str=Header(default='0'), user=Depends(current_user), db=Depends(get_db)):
+    def events(job_id:str, last_event_id:str=Header(default='0'), user=Depends(permitted('workspace.read')), db=Depends(get_db)):
         job = owned(db,user,'job',job_id)
         try: cursor = int(last_event_id)
         except ValueError: raise HTTPException(422,'Invalid event cursor')
@@ -901,18 +1094,18 @@ def create_app(settings=None):
 
     @app.get('/api/v1/decisions')
     def decisions(limit: int = DEFAULT_LIMIT, cursor: str | None = None, product_id: str | None = None,
-                  user=Depends(current_user), db=Depends(get_db)):
+                  user=Depends(permitted('workspace.read')), db=Depends(get_db)):
         query = records(db,user,'decision')
         if product_id: query = query.filter(Record.payload['product_id'].as_string() == product_id)
         rows, page = paginate(query, limit, cursor)
         return {'decisions':[serialize(r) for r in rows], **page}
 
     @app.get('/api/v1/decisions/{decision_id}')
-    def saved_decision(decision_id:str,user=Depends(current_user),db=Depends(get_db)):
+    def saved_decision(decision_id:str,user=Depends(permitted('workspace.read')),db=Depends(get_db)):
         return serialize(owned(db,user,'decision',decision_id))
 
     @app.get('/api/v1/watchlists/default/items')
-    def watches(limit: int = DEFAULT_LIMIT, cursor: str | None = None, user=Depends(current_user), db=Depends(get_db)):
+    def watches(limit: int = DEFAULT_LIMIT, cursor: str | None = None, user=Depends(permitted('workspace.read')), db=Depends(get_db)):
         rows, page = paginate(records(db,user,'watch'), limit, cursor)
         return {'items':with_product_names(db,user,rows,assessments=True), **page}
 
@@ -941,19 +1134,19 @@ def create_app(settings=None):
         return {'status':'removed'}
 
     @app.get('/api/v1/alerts')
-    def alerts(user=Depends(current_user)):
+    def alerts(user=Depends(permitted('workspace.read'))):
         return {'alerts':[], 'status':'unavailable','reason':'Scheduled collection and alert delivery are not enabled.'}
 
     @app.get('/api/v1/quotes')
     def quotes(limit: int = DEFAULT_LIMIT, cursor: str | None = None, product_id: str | None = None,
-               user=Depends(current_user), db=Depends(get_db)):
+               user=Depends(permitted('workspace.read')), db=Depends(get_db)):
         query = records(db,user,'quote')
         if product_id: query = query.filter(Record.payload['product_id'].as_string() == product_id)
         rows, page = paginate(query, limit, cursor)
         return {'quotes':with_product_names(db,user,rows), **page}
 
     @app.get('/api/v1/summary')
-    def summary(user=Depends(current_user), db=Depends(get_db)):
+    def summary(user=Depends(permitted('workspace.read')), db=Depends(get_db)):
         """Workspace counts computed in the database, not from whatever page is loaded (T05).
 
         `products_awaiting_evidence` counts the product records whose evidence status is
@@ -1015,7 +1208,6 @@ def create_app(settings=None):
 
     @app.get('/api/v1/audit')
     def audit_log(limit: int = 100, user=Depends(permitted('audit.read')), db=Depends(get_db)):
-        from .db import Audit
         if limit < 1 or limit > 500: raise HTTPException(422, 'Page size must be between 1 and 500.')
         rows = db.query(Audit).filter_by(workspace_id=user.workspace_id).order_by(Audit.created_at.desc()).limit(limit).all()
         return {'events':[{'action':r.action, 'actor':r.user_id, 'workspace_id':r.workspace_id,

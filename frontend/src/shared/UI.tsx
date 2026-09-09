@@ -110,6 +110,12 @@ export function ProductPicker({name,confirmedOnly=false}:{name:string;confirmedO
     </select></label>
     {options.length
       ? <p className="form-caption">{query.isFetching?'Searching…':`Choosing from ${options.length} of ${total} products.`}{total>options.length&&' Search to narrow to one that is not listed.'}</p>
-      : <p className="form-caption">{query.isFetching?'Searching…':search?'No product matches that search.':'No products yet.'}</p>}
+      : query.isError
+        // A failed lookup is not an answer about the workspace. Saying "no product
+        // matches" here would report a fact this picker could not check (finding F03).
+        ? <p className="form-caption">Your products could not be loaded, so this list is
+            incomplete — this is not a statement that you have none.{' '}
+            <button type="button" className="text-button" onClick={()=>void query.refetch()}>Retry</button></p>
+        : <p className="form-caption">{query.isFetching?'Searching…':search?'No product matches that search.':'No products yet.'}</p>}
   </>;
 }
