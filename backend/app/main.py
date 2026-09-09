@@ -13,11 +13,12 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from . import migrate
 from .settings import Settings
-from .db import Database, Workspace, User, Session, Record, records, audit, now, uid
+from .db import Database, Workspace, User, Session, RecoveryToken, Record, records, audit, now, uid
 from .security import dummy_verify, hash_password, verify_password, token_hash, consume, purge_expired, resolve_input
 from .limits import BodyLimit, MAX_BODY_BYTES
 from .observability import Counters, REQUEST_ID, USER_ID, WORKSPACE_ID, logger, new_request_id, route_label
 from .permissions import matrix, require
+from . import mail
 from .evidence import EvidenceRequest, MANUAL_TRUTH_STATE, METHOD_VERSION, METRICS, quality
 from . import compliance as cmp
 from .economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate, economics_summary
@@ -65,6 +66,25 @@ class Credentials(StrictModel):
     email: str = Field(min_length=5, max_length=254, pattern=r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
     password: Annotated[str, StringConstraints(strip_whitespace=False, min_length=12, max_length=128)]
     name: str = Field(default='My workspace', min_length=1, max_length=80)
+
+#: A password field, everywhere one appears. Same rule as `Credentials.password` and for
+#: the same reason (R02): a password is an opaque secret, never normalised.
+Password = Annotated[str, StringConstraints(strip_whitespace=False, min_length=12, max_length=128)]
+
+class RecoveryRequest(StrictModel):
+    """Ask for a reset link. Deliberately says nothing about whether the account exists."""
+    email: str = Field(min_length=5, max_length=254, pattern=r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+
+class PasswordReset(StrictModel):
+    """Redeem a reset token. The token is a bearer credential, so it is never normalised."""
+    token: Annotated[str, StringConstraints(strip_whitespace=False, min_length=20, max_length=200)]
+    password: Password
+
+class PasswordChange(StrictModel):
+    """Change a password while signed in. The current one is required: a borrowed session
+    must not be enough to lock the owner out of their own account."""
+    current_password: Password
+    new_password: Password
 
 class XrayRequest(StrictModel):
     input: str = Field(min_length=10, max_length=2048)
@@ -132,6 +152,9 @@ def create_app(settings=None):
 
     app = FastAPI(title='TrendSell Evidence API', version='2.0.0', lifespan=lifespan)
     app.state.database = database
+    # Exposed so a test can assert against the limit actually in force rather than a
+    # number copied into the test and quietly drifting from it.
+    app.state.settings = settings
     # Outermost, so an oversized body is refused before anything reads it. Counting the
     # bytes as they arrive is what a Content-Length check could not do (action plan P04).
     app.add_middleware(BodyLimit, limit=MAX_BODY_BYTES)
@@ -333,9 +356,11 @@ def create_app(settings=None):
     def user_view(user):
         return {'id':user.id, 'name':user.name, 'email':user.email, 'workspace_id':user.workspace_id, 'role':user.role}
 
-    def start_session(db, user, response):
+    def start_session(db, user, response, request=None):
         token = secrets.token_urlsafe(48)
-        db.add(Session(token_hash=token_hash(token), user_id=user.id, expires_at=(datetime.now(timezone.utc)+timedelta(days=7)).isoformat()))
+        db.add(Session(token_hash=token_hash(token), user_id=user.id,
+                       expires_at=(datetime.now(timezone.utc)+timedelta(days=7)).isoformat(),
+                       created_at=now(), client=client_label(request)))
         audit(db, user, 'auth.login')
         db.commit()
         response.set_cookie('trendsell_session', token, httponly=True, secure=settings.environment=='production', samesite='strict', max_age=604800, path='/api')
@@ -422,7 +447,7 @@ def create_app(settings=None):
         except IntegrityError:
             db.rollback()
             raise HTTPException(409, 'Unable to register this email. Try signing in.')
-        return start_session(db, user, response)
+        return start_session(db, user, response, request)
 
     @app.post('/api/v1/auth/login')
     def login(payload: Credentials, request: Request, response: Response, db=Depends(get_db)):
@@ -446,7 +471,7 @@ def create_app(settings=None):
             # existing user is locked out and nobody has to reset a password (P02).
             user.password_hash = hash_password(payload.password)
             audit(db, user, 'auth.password_rehashed')
-        return start_session(db, user, response)
+        return start_session(db, user, response, request)
 
     @app.get('/api/v1/auth/me')
     def me(user=Depends(current_user)): return user_view(user)
@@ -458,6 +483,160 @@ def create_app(settings=None):
         db.commit()
         response.delete_cookie('trendsell_session', path='/api')
         return {'status':'signed_out'}
+
+
+    # --- Account recovery and session management (action plan P03) ---------------------
+    #
+    # Delivery is still blocked on a provider decision, so nothing here sends mail by
+    # itself: it hands a `Message` to whatever transport is configured, and the default
+    # transport refuses. Everything either side of that seam is implemented and tested
+    # against a local sink, so switching on a provider is configuration, not development.
+    #
+    # Review finding R02 made this urgent rather than merely planned: a normalisation bug
+    # locked valid accounts out, and there was no way for an affected person to get back
+    # in without an operator editing the database.
+
+    mailer = mail.build(settings)
+    app.state.mailer = mailer
+    #: Short, because a reset link is a bearer credential sitting in an inbox.
+    RESET_TTL_MINUTES = 30
+    RESET_PURPOSE = 'password_reset'
+
+    def client_label(request):
+        """A short, non-identifying hint so a person can recognise their own session."""
+        if request is None:
+            return None
+        agent = (request.headers.get('user-agent') or '').strip()
+        return agent[:120] or None
+
+    def issue_reset(db, user):
+        """Mint a single-use reset token and return the secret exactly once."""
+        # Any outstanding token is spent: asking for a new link invalidates the old one,
+        # so a forwarded or leaked earlier mail stops working.
+        db.query(RecoveryToken).filter_by(user_id=user.id, purpose=RESET_PURPOSE,
+                                          used_at=None).update({'used_at': now()})
+        token = secrets.token_urlsafe(32)
+        db.add(RecoveryToken(
+            token_hash=token_hash(token), user_id=user.id, purpose=RESET_PURPOSE,
+            expires_at=(datetime.now(timezone.utc) + timedelta(minutes=RESET_TTL_MINUTES)).isoformat(),
+            created_at=now()))
+        return token
+
+    def revoke_sessions(db, user, keep=None):
+        """End every session for this user, optionally sparing the one in hand."""
+        query = db.query(Session).filter_by(user_id=user.id)
+        if keep:
+            query = query.filter(Session.token_hash != keep)
+        return query.delete(synchronize_session=False)
+
+    @app.post('/api/v1/auth/recovery/request', status_code=202)
+    def request_recovery(payload: RecoveryRequest, request: Request, db=Depends(get_db)):
+        """Start a password reset. Always answers the same way.
+
+        The response cannot depend on whether the account exists, whether it has a
+        deliverable address, or whether sending worked — any of those would turn this
+        endpoint into an account-existence oracle. What varies is what happens behind it.
+        """
+        email = payload.email.lower().strip()
+        # Two limits, matching sign-in: the address bound stops bulk probing, the account
+        # bound stops someone flooding one person's inbox from many addresses.
+        consume(db, f'recover-ip:{request.client.host}:{now()[:13]}', settings.register_ip_hourly_limit,
+                message='Too many recovery requests from this address. Try again later.')
+        consume(db, f'recover-account:{token_hash(email)}:{now()[:13]}', settings.login_account_hourly_limit,
+                message='Too many recovery requests. Check your inbox, or try again later.')
+        user = db.query(User).filter_by(email=email).first()
+        if user and mailer.configured:
+            token = issue_reset(db, user)
+            audit(db, user, 'auth.recovery_requested')
+            db.commit()
+            try:
+                mailer.send(mail.Message(
+                    to=user.email, purpose=RESET_PURPOSE,
+                    subject='Reset your TrendSell password',
+                    body=('Someone asked to reset the password for this TrendSell workspace.\n\n'
+                          f'Reset token: {token}\n\n'
+                          f'It can be used once, and expires in {RESET_TTL_MINUTES} minutes.\n'
+                          'If this was not you, no action is needed: nothing has changed.')))
+            except mail.MailNotConfigured:
+                # The token is already spent-on-issue; log the failure and still answer
+                # identically. A delivery outage must not become an enumeration signal.
+                logger.warning('recovery mail undelivered', extra={'context': {'purpose': RESET_PURPOSE}})
+        elif user:
+            # A real account, but nothing can carry the token. Recorded so an operator can
+            # see that recovery is being asked for while delivery is unconfigured.
+            logger.warning('recovery requested with no mail transport',
+                           extra={'context': {'purpose': RESET_PURPOSE}})
+        return {'status': 'accepted',
+                'detail': 'If that address has a workspace, a reset link is on its way.',
+                'delivery_configured': mailer.configured}
+
+    @app.post('/api/v1/auth/recovery/reset')
+    def reset_password(payload: PasswordReset, db=Depends(get_db)):
+        """Redeem a reset token, then end every session the account had."""
+        row = db.get(RecoveryToken, token_hash(payload.token))
+        # One message for every failure mode: expired, already used, wrong purpose, or
+        # never existed. Distinguishing them tells an attacker which guess was close.
+        if not row or row.used_at or row.purpose != RESET_PURPOSE or row.expires_at <= now():
+            raise HTTPException(400, 'This reset link is no longer valid. Request a new one.')
+        user = db.get(User, row.user_id)
+        if not user:
+            raise HTTPException(400, 'This reset link is no longer valid. Request a new one.')
+        row.used_at = now()
+        user.password_hash = hash_password(payload.password)
+        # Whoever prompted the reset may be holding a stolen session. Ending all of them,
+        # including this browser's, is the point of a reset.
+        revoked = revoke_sessions(db, user)
+        audit(db, user, 'auth.password_reset', detail={'sessions_revoked': revoked})
+        db.commit()
+        return {'status': 'password_reset', 'sessions_revoked': revoked}
+
+    @app.post('/api/v1/auth/password')
+    def change_password(payload: PasswordChange, request: Request, user=Depends(current_user), db=Depends(get_db)):
+        """Change a password while signed in, keeping only the session doing it."""
+        ok, _ = verify_password(payload.current_password, user.password_hash)
+        if not ok:
+            raise HTTPException(403, 'Current password is incorrect.')
+        if payload.new_password == payload.current_password:
+            raise HTTPException(400, 'The new password must be different from the current one.')
+        user.password_hash = hash_password(payload.new_password)
+        current = token_hash(request.cookies.get('trendsell_session', ''))
+        revoked = revoke_sessions(db, user, keep=current)
+        audit(db, user, 'auth.password_changed', detail={'sessions_revoked': revoked})
+        db.commit()
+        return {'status': 'password_changed', 'sessions_revoked': revoked}
+
+    @app.get('/api/v1/auth/sessions')
+    def list_sessions(request: Request, user=Depends(current_user), db=Depends(get_db)):
+        """The sessions this account has open. Never returns a token or a hash of one."""
+        current = token_hash(request.cookies.get('trendsell_session', ''))
+        rows = (db.query(Session).filter_by(user_id=user.id)
+                  .filter(Session.expires_at > now()).order_by(Session.created_at.desc()).all())
+        return {'sessions': [{'id': uid_for_session(row), 'started_at': row.created_at,
+                              'expires_at': row.expires_at, 'client': row.client,
+                              'current': row.token_hash == current} for row in rows],
+                'total': len(rows)}
+
+    def uid_for_session(row):
+        """A stable handle for one session that is not its token hash.
+
+        The hash verifies a bearer token; handing it to the browser would put a
+        password-equivalent value in a list view. This is derived from it, one way, so it
+        can address a session without being able to authenticate one.
+        """
+        return hashlib.sha256(f'session-handle:{row.token_hash}'.encode()).hexdigest()[:32]
+
+    @app.delete('/api/v1/auth/sessions/{handle}')
+    def revoke_session(handle: str, request: Request, user=Depends(current_user), db=Depends(get_db)):
+        """Revoke one session by its handle. Only ever the caller's own."""
+        rows = db.query(Session).filter_by(user_id=user.id).all()
+        target = next((row for row in rows if uid_for_session(row) == handle), None)
+        if not target:
+            raise HTTPException(404, 'That session is not open on this account.')
+        was_current = target.token_hash == token_hash(request.cookies.get('trendsell_session', ''))
+        db.delete(target)
+        audit(db, user, 'auth.session_revoked', detail={'was_current': was_current})
+        db.commit()
+        return {'status': 'revoked', 'was_current': was_current}
 
     @app.get('/api/v1/data-health')
     def data_health():

@@ -81,10 +81,37 @@ is a gap to close before a pilot takes real customer data.
 
 ## Account recovery
 
-**Not available.** There is no email verification, password reset, session listing or
-revocation UI. Email delivery is unconfigured (P03), and until a provider is chosen a user
-who loses their password has no self-service path. Registration is closed in production
-(`ALLOW_REGISTRATION=false`), so accounts are created deliberately.
+**Implemented, but not deliverable.** The reset flow, password change, and session listing
+and revocation exist and are tested end to end against a local mail sink. What does not
+exist is a mail provider, so in production `MAIL_TRANSPORT` is empty and:
+
+* `POST /api/v1/auth/recovery/request` answers exactly as it always does — the response
+  cannot reveal whether an account exists — but **mints no token and sends nothing**, and
+  logs a warning so an operator can see recovery being asked for while delivery is off.
+  Its `delivery_configured: false` field says plainly that no mail is coming.
+* A user who loses their password still has no self-service path. An operator has to
+  intervene, and that procedure is not yet written down.
+
+What is available today without any provider, to a user who is still signed in:
+
+| Action | Endpoint | Behaviour |
+| --- | --- | --- |
+| Change password | `POST /api/v1/auth/password` | Requires the current password. Revokes every other session and keeps the one making the change. |
+| List sessions | `GET /api/v1/auth/sessions` | Start time, expiry, a truncated client hint, and which one is current. Never returns a token or a token hash. |
+| Revoke a session | `DELETE /api/v1/auth/sessions/{handle}` | Ends one session. The handle is derived one-way from the token hash, so it can address a session without authenticating one. |
+
+Reset tokens are stored only as hashes, are single-use, expire in 30 minutes, are bound to
+their purpose, and are invalidated when a newer one is issued. Requesting a reset is rate
+limited per address and per account. Every rejection — expired, spent, wrong purpose,
+never existed — returns the same message.
+
+Registration is closed in production (`ALLOW_REGISTRATION=false`), so accounts are created
+deliberately.
+
+**Still not implemented:** verified email ownership. Until a provider exists there is no
+way to prove an address belongs to the person who typed it, so recovery would deliver to
+an address nobody has confirmed. That is the main reason this is not merely a
+configuration switch.
 
 ## Before a real pilot
 
@@ -94,4 +121,6 @@ These must be settled with the product owner, not by engineering alone:
 2. A deletion procedure, and the retention period for audit events and backups.
 3. Recovery point and recovery time objectives, and a restore drill against production
    data (see [the runbook](RUNBOOK.md)).
-4. Account recovery, which needs an email provider decision.
+4. An email provider, which gates account recovery delivery *and* verified email
+   ownership. The application side of recovery is implemented and tested; nothing is
+   waiting on engineering except the verification flow that a provider makes meaningful.

@@ -31,8 +31,14 @@ class User(Base):
 class Session(Base):
     __tablename__ = 'sessions'
     token_hash = Column(String, primary_key=True)
-    user_id = Column(String, ForeignKey('users.id'), nullable=False)
+    user_id = Column(String, ForeignKey('users.id'), nullable=False, index=True)
     expires_at = Column(String, nullable=False)
+    #: A session a person cannot recognise is one they cannot decide to revoke, so each
+    #: records when it started and the client that started it (action plan P03).
+    created_at = Column(String, nullable=False, default=now)
+    #: Truncated and never parsed back into an identity: enough to tell "my laptop" from
+    #: "something else", not a device fingerprint.
+    client = Column(String)
 
 class Record(Base):
     """Versioned pilot records; kind-specific contracts are validated by the API.
@@ -65,6 +71,23 @@ class Audit(Base):
     request_id = Column(String, index=True)
     detail = Column(Payload)
     created_at = Column(String, nullable=False, default=now, index=True)
+
+class RecoveryToken(Base):
+    """A single-use, purpose-bound, short-lived credential sent to a verified address.
+
+    Only the hash is stored: the token itself exists in the message and nowhere else, so a
+    database copy cannot be used to take over an account (action plan P03). `purpose` is
+    part of the lookup, so a token minted for one action cannot be replayed against
+    another. `used_at` makes it single-use without deleting the row, which keeps a reuse
+    attempt auditable rather than indistinguishable from an expired one.
+    """
+    __tablename__ = 'recovery_tokens'
+    token_hash = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey('users.id'), nullable=False, index=True)
+    purpose = Column(String, nullable=False)
+    expires_at = Column(String, nullable=False, index=True)
+    created_at = Column(String, nullable=False, default=now)
+    used_at = Column(String)
 
 class RateBucket(Base):
     """One counter for one key in one window.

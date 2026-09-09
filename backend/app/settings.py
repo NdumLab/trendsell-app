@@ -23,6 +23,12 @@ class Settings:
     #: are fleet-wide, so they are not a workspace's to read: owning a workspace is not
     #: operating the service. Unset means the surface is off, which is the default.
     metrics_token: str = ''
+    #: Outbound mail transport (action plan P03): '' (none), 'sink' or 'log'. No provider
+    #: is shipped -- that decision is still open -- so recovery reports itself unavailable
+    #: rather than silently dropping a reset a user is waiting for.
+    mail_transport: str = ''
+    #: Where a 'sink' transport writes each message, for a developer exercising the flow.
+    mail_sink_dir: str = ''
     #: How long readiness may reuse its physical-schema verdict (review finding R09).
     #: Inspecting tables and columns on every probe would make a liveness-frequency
     #: endpoint do real work; a changed revision refreshes the verdict regardless of
@@ -56,6 +62,10 @@ class Settings:
         if recheck < 0 or recheck > 3600:
             raise ValueError('SCHEMA_RECHECK_SECONDS must be between 0 and 3600')
 
+        transport = os.getenv('MAIL_TRANSPORT', '').strip().lower()
+        if transport not in {'', 'sink', 'log'}:
+            raise ValueError("MAIL_TRANSPORT must be '', 'sink' or 'log'")
+
         return cls(env, url, origins,
                    os.getenv('ALLOW_REGISTRATION', 'false' if env == 'production' else 'true') == 'true', limit,
                    hourly('LOGIN_IP_HOURLY_LIMIT', 30),
@@ -63,4 +73,6 @@ class Settings:
                    hourly('REGISTER_IP_HOURLY_LIMIT', 10),
                    hourly('WORKSPACE_WRITE_MINUTE_LIMIT', 60),
                    os.getenv('METRICS_TOKEN', ''),
+                   transport,
+                   os.getenv('MAIL_SINK_DIR', ''),
                    recheck)

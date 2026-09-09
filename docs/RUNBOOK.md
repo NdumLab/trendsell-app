@@ -72,6 +72,24 @@ suite failing.
 The baseline has no downgrade: dropping it would destroy every customer record. Rolling
 back a bad schema change means restoring a backup, not downgrading.
 
+## Turning on account recovery
+
+Nothing in the application needs to change; the transport is configuration. Before
+switching it on, two decisions have to be made that are not engineering's to make: which
+provider sends the mail, and whether addresses must be verified before recovery will
+deliver to them.
+
+1. Choose a provider and a sending identity, and configure SPF/DKIM for it.
+2. Add a transport class to `backend/app/mail.py` — one `send()` that takes a `Message` —
+   and a branch in `build()`. Nothing that calls `send()` changes.
+3. Set `MAIL_TRANSPORT` in `/etc/trendsell/trendsell.env` and restart.
+4. Verify against a disposable account: request a reset, confirm the message arrives,
+   redeem it, and confirm every session for that account ended.
+
+`MAIL_TRANSPORT=sink` writes messages to `MAIL_SINK_DIR` instead of sending them. It is
+for development and tests, and must never be set in production: a reset token is a bearer
+credential, and the sink writes it to disk in the clear.
+
 ## Releasing
 
 1. Build and test the artifact: backend suite (SQLite and PostgreSQL), frontend unit and
@@ -132,8 +150,16 @@ a copy of production and the result recorded in this file.
 These are known and tracked, not oversights:
 
 * No scheduled collection runs, so no backup covers collector state — there is none yet.
-* Email delivery is unconfigured. Account recovery uses a local sink in development and is
-  not available in production until a provider is chosen (action plan P03).
+* Email delivery is unconfigured (`MAIL_TRANSPORT=`). The reset flow, password change and
+  session revocation are implemented and tested against a local sink, but with no
+  transport the recovery endpoint mints no token and sends nothing — it still answers
+  identically, because the response must never reveal whether an account exists, and its
+  `delivery_configured: false` says no mail is coming. **A locked-out user therefore has
+  no self-service path and needs an operator**, and that procedure is not yet written.
+  Verified email ownership is also not implemented: without a provider there is no way to
+  prove an address belongs to whoever typed it (action plan P03).
+* Metrics are behind `METRICS_TOKEN` and are per worker, so a value is a floor rather
+  than a fleet total. Owning a workspace does not grant access (review finding R07).
 * No alerting is wired to an on-call destination (action plan P07). Counters are exposed at
   `GET /api/v1/ops/metrics` for an owner, and every request is logged as JSON with an id;
   nothing yet forwards either to a paging destination.
