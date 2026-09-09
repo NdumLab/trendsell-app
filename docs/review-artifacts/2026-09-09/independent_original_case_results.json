@@ -1,0 +1,119 @@
+{
+  "R02_legacy_password_with_spaces": {
+    "hash_verifies_directly": true,
+    "login_status": 200,
+    "expected_login_status": 200
+  },
+  "R03_expired_or_incomplete_approval": {
+    "no_classification_or_requirements": {
+      "status": 422,
+      "reason": "Value error, An approval must record the classification it reviewed."
+    },
+    "expired_support_only": {
+      "status": 422,
+      "reason": "Every cited source is expired or not yet in force. An approval must rest on a publication that applies today."
+    }
+  },
+  "R03_valid_approval_still_resolves": {
+    "status": "approved",
+    "hs_code": "8516.79",
+    "gate_resolved": true
+  },
+  "R04_rejected_import_assessment": {
+    "decision": "NO-GO",
+    "compliance": {
+      "resolved": false,
+      "status": "rejected",
+      "review_id": "9bb15753-e558-4d38-9271-b977b8f4b2e9",
+      "reason": "A reviewer rejected this product for import. Do not proceed."
+    },
+    "confidence": 60,
+    "expected_decision": "NO-GO"
+  },
+  "R05_export": {
+    "keys": [
+      "compliance_reviews",
+      "counts",
+      "decisions",
+      "demo",
+      "evidence",
+      "exported_at",
+      "exported_by",
+      "products",
+      "quotes",
+      "research_jobs",
+      "schema",
+      "watches",
+      "workspace",
+      "workspace_id"
+    ],
+    "exported_counts": {
+      "products": 1,
+      "research_jobs": 1,
+      "decisions": 1,
+      "quotes": 0,
+      "watches": 0,
+      "evidence": 4,
+      "compliance_reviews": 2
+    }
+  },
+  "R06_restore_verification": {
+    "records_by_kind": {
+      "compliance_review": 2,
+      "decision": 1,
+      "evidence": 4,
+      "job": 1,
+      "product": 1
+    },
+    "assessment_replay_failures": [],
+    "expected_replay_failures": 0
+  },
+  "R07_cross_workspace_metrics": {
+    "workspace_owner_status": 403,
+    "expected_owner_status": 403,
+    "operator_status": 200,
+    "foreign_marker_visible_to_owner": false
+  },
+  "R07_unmatched_route_labels": {
+    "new_labels_from_20_unknown_paths": 0,
+    "expected_at_most": 1
+  },
+  "R09_readiness_missing_audit_table": {
+    "status": 503,
+    "expected_status": 503,
+    "body": {
+      "status": "schema_incomplete",
+      "database": "ok",
+      "schema_revision": "0004_account_recovery",
+      "expected_revision": "0004_account_recovery",
+      "schema_matches_models": false,
+      "missing_tables": [
+        "audit_events"
+      ],
+      "missing_columns": {}
+    }
+  },
+  "R08_documented_legacy_migration": {
+    "step2_against_baseline_matches": true,
+    "step2_revision": null,
+    "step2_against_models_matches": false,
+    "step2_against_models_missing_columns": {
+      "audit_events": [
+        "detail",
+        "request_id"
+      ],
+      "rate_buckets": [
+        "expires_at"
+      ],
+      "sessions": [
+        "client",
+        "created_at"
+      ]
+    },
+    "step5_revision": "0001_pilot_baseline",
+    "step5_up_to_date": false,
+    "step7_up_to_date": true,
+    "step7_matches_models": true,
+    "head_revision": "0004_account_recovery"
+  }
+}

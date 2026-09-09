@@ -4,9 +4,18 @@ Branch: `impl/evidence-platform-phase0`. Head: `f81c424`.
 Reviewed commit: `83a4a0d`. Review: [CLAUDE_IMPLEMENTATION_REVIEW_2026-09-08.md](CLAUDE_IMPLEMENTATION_REVIEW_2026-09-08.md).
 Written: 9 September 2026.
 
-**All eleven findings (R01–R11) are corrected and verified locally. Deployment remains
-pending Codex's final independent review; nothing here has been deployed, and Gate A is
-marked `In review`, not `Done`.**
+> **Superseded in part, 9 September.** The claim below that "all eleven findings are
+> corrected and verified" was too broad, and the
+> [9 September re-review](CLAUDE_IMPLEMENTATION_REVIEW_2026-09-09.md) said so. It closed
+> eight findings, found **R01, R03 and R07 still open** in narrower cases than the ones
+> originally reported, and found **two further defects** in the new recovery code. Those
+> five are recorded there as F01–F05 and are addressed in
+> [the F01–F05 section below](#f01f05--the-9-september-re-reviews-findings), which carries
+> the current verification numbers. Read this document's original body as the record of
+> the 8 September round.
+
+**Deployment remains pending an independent review; nothing here has been deployed, and
+Gate A is marked `In review`, not `Done`. No re-review has signed off.**
 
 The review was right to decline sign-off. Two of Gate A's own acceptance criteria were
 failing — an evidence-bearing draft disagreed with its own saved assessment, and the
@@ -102,6 +111,127 @@ telemetry are outstanding, and calling them done overstated the work. U02 is mar
 synthetic only. The "378 backend tests" claim conflated collected with executed and is now
 stated as measured.
 
+## F01–F05 — the 9 September re-review's findings
+
+Corrected on 9 September, after the original body of this document was written. Every
+number in this section was produced by running the command on the current working tree.
+
+| Check | Result |
+| --- | --- |
+| Backend, SQLite | **484 passed, 15 skipped** (499 collected; the skips require PostgreSQL) |
+| Backend, PostgreSQL 16.4 | **499 passed, 0 skipped**, disposable schemas |
+| Frontend unit/contract | **141 passed** (5 files) |
+| `npm run typecheck` | **Passed**, including `tsconfig.e2e.json` |
+| Production build | **Passed**; main bundle 766.32 kB, 232.91 kB gzip (chunk-size advisory only, pre-existing) |
+| Browser suite | **36 passed, 0 failed** in Chromium |
+| F01–F05 reproductions | All five report the expected outcome — [script](review-artifacts/2026-09-09/claude_f01_f05_verification.py), [results](review-artifacts/2026-09-09/claude_f01_f05_results.json) |
+
+Dependency scans were **not** rerun: no lockfile changed. No claim is made about advisory
+status beyond the previous review's, and nothing was deployed.
+
+| # | Finding | Correction | Regression that fails on the pre-fix code |
+| --- | --- | --- | --- |
+| F01 | A reset token could be redeemed twice concurrently: both requests validated it before either committed | The account row is locked (`SELECT … FOR UPDATE`), then the token is claimed by a conditional `UPDATE … WHERE used_at IS NULL` whose `rowcount` must be 1; every operation that changes account credentials takes the same lock first, so issuance, redemption and password change have one order | `test_one_reset_token_has_one_winner_under_postgres` — two threads released together; reverting to the unlocked read/write reproduces the reviewer's `[200, 200]` exactly |
+| F02 | Changing a password left previously issued reset tokens valid | A password change, and a reset, invalidate every outstanding recovery credential for the account in the same transaction | `test_changing_the_password_invalidates_an_older_reset_link` |
+| F03 | An evidence-read failure fell through to a zero-evidence draft that could still be exported | A missing authoritative reading is unavailable, not zero: draft calculation, saving *and* export are withheld while the detail read is pending or failed, with an explicit notice and a retry; the save button is disabled rather than silently no-opping | `e2e/decision-room-evidence.spec.ts` — failure pauses the draft, retry recovers it, and the recovered draft then matches the saved assessment exactly (the reviewer's own equality assertion) |
+| F04 | `hs_code: "."` was accepted, and legacy incomplete approvals still cleared the gate | The classification must match a documented shape (4–10 digits, or dotted `8451.30[.00[.10]]`); approval completeness is checked when a *stored* approval is read, not only when one is written, so an incomplete legacy record now reports `review_incomplete` and requires a new review. Saved assessment snapshots are untouched | `test_an_approval_requires_a_structured_classification` (6 cases), `test_a_legacy_incomplete_approval_cannot_clear_the_current_gate` |
+| F05 | Requests rejected before routing retained raw client-controlled paths as metric labels | `route_label()` no longer derives a label from a path at all: it returns the router's matched template or one shared `<unmatched>` label. The id-collapsing fallback is deleted — it was the mechanism the finding described, and no production caller used it | `test_requests_rejected_before_routing_share_one_safe_label`, `test_a_label_is_the_matched_template_and_never_the_raw_path` |
+
+Each regression was confirmed by reverting its fix individually and observing that test
+fail — not merely by observing it pass after the fix.
+
+**On the reviewer's two reproduction artifacts.** Both are unmodified in
+`docs/review-artifacts/2026-09-09/`, and neither can pass as written, for the same reason:
+each presumes the defect is still present.
+
+* `independent_recheck.py` synchronizes its two redemptions *inside* `hash_password`,
+  which requires both requests to reach hashing. Once the token is claimed under a row
+  lock, the loser is refused before it hashes, so the two-party barrier can never be
+  satisfied and the script aborts with `BrokenBarrierError`.
+  `claude_f01_f05_verification.py` is that script with the requests synchronized on entry
+  instead and the hash barrier tolerating a lone arrival — same overlap, no assumption
+  that the bug survives. Its other four cases are untouched and all report as expected.
+  Note that its `legacy_incomplete_approval` case has *degenerated*: it mutates the record
+  left by the approval attempt on the line above, which is now correctly refused with 422,
+  so the record never reaches `approved` and the case no longer exercises a stored legacy
+  approval. `test_a_legacy_incomplete_approval_cannot_clear_the_current_gate` covers that
+  path properly instead, by approving successfully first and then rewriting the payload.
+* `independent-rereview.spec.ts.txt` asserts that the draft export matches the saved
+  export during a failed read. There is now no draft export to take during a failed read,
+  so it times out waiting for a download. That is the outcome the finding's own required
+  correction asks for — "do not calculate or export an evidence verdict from a missing
+  authoritative reading" — rather than the equality it happened to assert. The equality it
+  was protecting is asserted in `decision-room-evidence.spec.ts` on the recovered read.
+  The specimen is therefore **not** carried into `e2e/`, unlike the 8 September one.
+
+**Beyond F01–F05**, and following the review's instruction to separate local work from the
+provider decision: verified email ownership is now implemented and exercised end to end
+against the sink (24-hour, single-use, purpose-bound tokens; purposes are not
+interchangeable; existing accounts are deliberately not grandfathered as verified), and
+account/workspace deletion is implemented behind the password and a typed phrase. Both
+arrived untested — 12 and 8 tests were added for them here, and the deletion tests were
+strengthened after mutation testing showed two of them passing vacuously. Deletion now
+refuses a workspace with other members rather than orphaning their rows. Neither feature
+has any browser UI; both are API-only.
+
+## End-to-end review, 9 September
+
+After F01–F05, an independent pass over the whole application: every route's
+authorisation, the full role matrix, cross-workspace isolation on every id-taking route,
+the complete journey from registration to export, log content, and the concurrency of
+every state transition carrying an invariant. Full detail, including what was checked and
+found sound, is in
+[claude_end_to_end_findings.md](review-artifacts/2026-09-09/claude_end_to_end_findings.md).
+
+Two defects were found and corrected:
+
+| # | Finding | Correction | Regression |
+| --- | --- | --- | --- |
+| E01 | **P1.** One compliance review accepted two conflicting decisions. `decide_review()` checked `status == 'requested'` then wrote, unlocked — F01's shape. Two simultaneous decisions both returned 200, one review recorded two `compliance.reviewed` events, and the later commit replaced the earlier: **a rejection could be overwritten by an approval that then resolved the gate** | The review row is locked before its status is read | `test_one_review_accepts_exactly_one_decision_under_postgres`; removing the lock reproduces `[200, 200]` |
+| E02 | **P2.** Three more screens reported a failed read as a fact — the F03 class, which had been corrected only in Decision Room. Today showed `00` in every counter beside products visible on the same screen; the evidence ledger said "No evidence recorded yet" beside four records; the picker said "No product matches that search." | Each names the failure and offers a retry instead of asserting a negative | `e2e/failed-read-honesty.spec.ts` (3 cases), all failing pre-fix |
+
+Two more are **open and need a product decision**, not just a patch:
+
+* **E03 (P2)** — `latest_review()` returns the newest review of *any* status, so a merely
+  *requested* review outranks a *decided* one. Any member with `workspace.write` can
+  therefore erase a reviewer's rejection from every later assessment by requesting another
+  review: the gate returns to `requested` and the "a reviewer rejected this product"
+  blocker disappears with no reviewer involved. It cannot manufacture a GO, but it removes
+  the authoritative signal R04 exists to carry. Recommended: compute the gate from the
+  latest *decided* review and show a pending re-request alongside it. This changes visible
+  behaviour, so it is the product owner's call.
+* **E04 (P3, latent)** — `workspace.read` is declared, granted to every role, and required
+  by **no route**. A role holding no permissions at all still reads products, evidence,
+  compliance, decisions, quotes, watches, summary and alerts. Harmless today because every
+  role holds it; wrong the moment a restricted role exists.
+
+A coverage gap was closed alongside them: the tenant-isolation module predates the
+evidence and compliance routes and never exercised them, so
+`test_a_stranger_cannot_reach_another_workspaces_evidence_or_review` now covers those
+reads, writes and the review decision itself. They were already correctly isolated —
+verified before the test was written — but nothing held them to it.
+
+Verification after these corrections: backend **504 passed** on PostgreSQL and 488 passed
+with 16 PostgreSQL-only skips on SQLite; **141** frontend unit tests; typecheck and
+production build pass; browser suite **45 passed**.
+
+## Production polish, 9 September
+
+Taking ownership of the branch, the two findings left open above were decided and closed,
+and the largest user-facing gap was built. See
+[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) for the go/no-go assessment.
+
+| Change | Why it mattered for production |
+| --- | --- |
+| **E03 closed** — the gate is computed from the latest *decided* review, and a pending re-request is shown beside it rather than replacing it | A reviewer's rejection could be erased by anyone who asked for another review. Deliberately asymmetric: a re-request can hold or worsen the gate, never improve it, and a replaced approval now reports `superseded` instead of falsely claiming it expired |
+| **E04 closed** — twelve workspace-data reads now require `workspace.read` | The permission was declared, granted, and checked nowhere. Account routes deliberately still need only a session: they are the person's own, not the workspace's |
+| **Account-security UI built** | Password reset from the sign-in dialog, password change, session listing and revocation, email verification and workspace deletion had no screens at all. `e2e/account-security.spec.ts` drives all six flows, reading each token out of the message the sink actually wrote |
+| **Operator lockout procedure written** | The runbook promised one and never had it. With no mail transport a locked-out user needs an operator; the steps, and the verify-first warning, are now in `docs/RUNBOOK.md` |
+| **Bundle split by route** | 779 kB (235 kB gzipped) on every first load, charting library included. Now ~118 kB gzipped, and the product screens carry their own chunk |
+| **nginx `/assets/` served no security headers** | `add_header` in a location block *replaces* the inherited set rather than merging, so every script and stylesheet went out with no nosniff, no CSP and no HSTS. Confirmed against a real nginx, fixed, and re-confirmed. The duplicate `Cache-Control` there is also gone |
+| **`WORKSPACE_WRITE_MINUTE_LIMIT` added to the env template** | A real setting the deployment template did not document |
+
+
 ## Residual defects and known gaps
 
 Nothing in this list is a regression introduced here; each is scope not yet built.
@@ -119,15 +249,24 @@ Nothing in this list is a regression introduced here; each is scope not yet buil
    reviewer.
 5. **Recovery cannot deliver** (P03). With no transport the endpoint mints no token and
    sends nothing; a locked-out user still needs an operator, and that procedure is not
-   written. Verified email ownership is not implemented.
-6. **Account and workspace deletion** is not implemented.
+   written. *Updated 9 September: verified email ownership is now implemented and tested
+   against the sink; only delivery is blocked, and it needs a transport class, not just a
+   setting.*
+6. ~~**Account and workspace deletion** is not implemented.~~ *Implemented 9 September,
+   API-only. A shared workspace is refused rather than partially deleted.*
+6a. ~~**No browser UI for account security.**~~ *Built 9 September: password reset from the
+   sign-in dialog, password change, session listing and revocation, email verification and
+   workspace deletion all have screens, each covered by a browser test that reads its token
+   out of the message the sink wrote. What remains is delivery, and the operator procedure
+   for a locked-out user — now written up in the runbook.*
 7. **No production restore drill, no scheduled backups, no agreed RPO/RTO** (P06). The
    drill above is disposable PostgreSQL only.
 8. **No alerting reaches an on-call destination** (P07). Counters and structured logs
    exist; nothing forwards them.
 9. **Metrics are per worker**, so a value is a floor rather than a fleet total.
-10. **The production frontend bundle exceeds 500 kB** and is not code-split. Pre-existing;
-    no user-visible failure, but it should be addressed before a public release.
+10. ~~**The production frontend bundle exceeds 500 kB** and is not code-split.~~ *Split by
+    route on 9 September: initial JS is ~118 kB gzipped rather than 235 kB, and the
+    charting library now loads only with the product screens that use it.*
 11. **The e2e harness raises `WORKSPACE_WRITE_MINUTE_LIMIT` to 5000 and
     `RESEARCH_DAILY_LIMIT` to 1000** so `large-workspace.spec.ts` can seed several hundred
     records. The shipped defaults are unchanged and `test_request_limits.py` covers them
@@ -152,8 +291,10 @@ remains.
 
 ## Recommended next steps
 
-1. **Codex's independent re-review of this branch.** Deployment stays pending it. The
-   fastest confirmation is `verification.py` plus `e2e/review-regressions.spec.ts`.
+1. **A further independent review of this branch.** Deployment stays pending it. The
+   fastest confirmation is `claude_f01_f05_verification.py --postgres` plus the browser
+   suite; `verification.py` and `e2e/review-regressions.spec.ts` still cover the
+   8 September round.
 2. Unblocked local work, in the order I would take it: the E01 public-source
    feasibility/rights matrix (it defines the contracts every collector needs, and nothing
    downstream should be built before it); Data Health attempt/freshness telemetry (E07);
@@ -172,9 +313,12 @@ TEST_POSTGRES_URL='postgresql+psycopg://trendsell_test:disposable@127.0.0.1:5543
 # Frontend
 cd frontend && npx tsc --noEmit && npm run test && npm run build && npx playwright test
 
-# The review's findings, and the restore drill
+# The 8 September findings, and the restore drill
 .venv/bin/python docs/review-artifacts/2026-09-09/verification.py
 .venv/bin/python docs/review-artifacts/2026-09-09/restore_drill.py
+
+# The 9 September findings (F01-F05). --postgres is required for F01's concurrency case.
+.venv/bin/python docs/review-artifacts/2026-09-09/claude_f01_f05_verification.py --postgres
 ```
 
 Both scripts create and drop their own disposable databases and never read a live one.

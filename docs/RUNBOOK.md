@@ -45,7 +45,7 @@ The running installation's tables were created once by an untracked
 Adopt it rather than re-creating it:
 
 The installation predates every revision, so it matches `0001_pilot_baseline` and
-correctly **lacks** what `0002` and `0003` add. Check it against the baseline, not against
+correctly **lacks** what `0002` onwards add. Check it against the baseline, not against
 today's models — a plain `check` reports `matches_models: False` on a perfectly healthy
 pre-migration database.
 
@@ -60,7 +60,8 @@ pre-migration database.
 5. `python -m app.migrate check --against 0001_pilot_baseline` — expect
    `current_revision: 0001_pilot_baseline`. `up_to_date` is still `False`, which is
    correct: stamping adopts the baseline and deliberately applies nothing after it.
-6. `python -m app.migrate upgrade` — applies `0002` and `0003`.
+6. `python -m app.migrate upgrade` — applies `0002` through the current head
+   (`0005_email_verification` at the time of writing).
 7. `python -m app.migrate check` — now against the models, expect `up_to_date: True` and
    `matches_models: True`.
 8. `curl -fsS https://<domain>/api/ready` — expect 200 and `"status":"ready"`.
@@ -74,10 +75,12 @@ back a bad schema change means restoring a backup, not downgrading.
 
 ## Turning on account recovery
 
-Nothing in the application needs to change; the transport is configuration. Before
-switching it on, two decisions have to be made that are not engineering's to make: which
-provider sends the mail, and whether addresses must be verified before recovery will
-deliver to them.
+This is **not** configuration alone. `mail.build()` accepts `sink`, `log` and empty, so a
+real provider needs a new transport class and a branch in `build()` — a code change and a
+release — plus the environment setting. Nothing that *calls* `send()` changes, which is
+the point of the seam, but the build does. Before switching it on, two decisions have to
+be made that are not engineering's to make: which provider sends the mail, and whether
+addresses must be verified before recovery will deliver to them.
 
 1. Choose a provider and a sending identity, and configure SPF/DKIM for it.
 2. Add a transport class to `backend/app/mail.py` — one `send()` that takes a `Message` —
@@ -85,10 +88,71 @@ deliver to them.
 3. Set `MAIL_TRANSPORT` in `/etc/trendsell/trendsell.env` and restart.
 4. Verify against a disposable account: request a reset, confirm the message arrives,
    redeem it, and confirm every session for that account ended.
+5. Verify ownership end to end on the same account: register, confirm the verification
+   message arrives, redeem it, and confirm `email_verified` becomes true.
 
 `MAIL_TRANSPORT=sink` writes messages to `MAIL_SINK_DIR` instead of sending them. It is
 for development and tests, and must never be set in production: a reset token is a bearer
 credential, and the sink writes it to disk in the clear.
+
+## A locked-out user, while no mail transport is configured
+
+With `MAIL_TRANSPORT` empty the reset endpoint answers normally but delivers nothing, so
+a person who has lost their password cannot recover unaided. Until a provider is chosen,
+this is the procedure — and it is deliberately manual, because handing out a credential
+is not something the application should do without a delivery channel it trusts.
+
+**Confirm who is asking before you do any of this.** A reset token is a bearer credential:
+whoever holds it controls the account until it is redeemed or expires. Verify the request
+through a channel you already trust, not through the address in the request.
+
+1. Confirm the account exists and note its id:
+
+   ```bash
+   sudo -u trendsell /opt/trendsell/venv/bin/python - <<'EOF'
+   from app.db import Database, User
+   from app.settings import Settings
+   with Database(Settings.from_env().database_url).session() as db:
+       user = db.query(User).filter_by(email='person@example.com').one_or_none()
+       print(user and (user.id, user.workspace_id, user.email_verified_at))
+   EOF
+   ```
+
+2. Issue a single-use token, valid 30 minutes, and read it once:
+
+   ```bash
+   sudo -u trendsell /opt/trendsell/venv/bin/python - <<'EOF'
+   import secrets
+   from datetime import datetime, timedelta, timezone
+   from app.db import Database, RecoveryToken, User, now
+   from app.security import token_hash
+   from app.settings import Settings
+   token = secrets.token_urlsafe(32)
+   with Database(Settings.from_env().database_url).session() as db:
+       user = db.query(User).filter_by(email='person@example.com').one()
+       # Spend any outstanding token first, exactly as the API does.
+       db.query(RecoveryToken).filter_by(user_id=user.id, purpose='password_reset',
+                                         used_at=None).update({'used_at': now()})
+       db.add(RecoveryToken(
+           token_hash=token_hash(token), user_id=user.id, purpose='password_reset',
+           expires_at=(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+           created_at=now()))
+       db.commit()
+   print(token)   # the only time this value exists in the clear
+   EOF
+   ```
+
+3. Give the token to the person over the trusted channel. They enter it under **Forgot
+   your password?** in the sign-in dialog. Redeeming it ends every session on the
+   account, which is the point.
+
+4. Record what you did: who asked, how you verified them, when, and that the token was
+   issued. The application audits the redemption (`auth.password_reset`) but cannot audit
+   your decision to trust the request.
+
+Never read, copy or set `password_hash` directly, and never send a token to the address
+in the request before you have verified it by another route. The same procedure issues an
+`email_verification` token — change the `purpose` and use a 24-hour expiry.
 
 ## Releasing
 
@@ -156,8 +220,12 @@ These are known and tracked, not oversights:
   identically, because the response must never reveal whether an account exists, and its
   `delivery_configured: false` says no mail is coming. **A locked-out user therefore has
   no self-service path and needs an operator**, and that procedure is not yet written.
-  Verified email ownership is also not implemented: without a provider there is no way to
-  prove an address belongs to whoever typed it (action plan P03).
+  Verified email ownership *is* implemented and exercised end to end against the sink;
+  what a provider blocks is delivering the message, not proving ownership. Existing
+  accounts are deliberately left unverified rather than grandfathered (action plan P03).
+* No browser UI exists for recovery, password change, session management, email
+  verification or account deletion. All are API-only, so today they need a client that
+  can send the requests — this is local work, not blocked on the provider.
 * Metrics are behind `METRICS_TOKEN` and are per worker, so a value is a floor rather
   than a fleet total. Owning a workspace does not grant access (review finding R07).
 * No alerting is wired to an on-call destination (action plan P07). Counters are exposed at

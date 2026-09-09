@@ -1,0 +1,26 @@
+import { apiProduct, asin, downloadJson, expect, fillDecisionInputs, recordFullCoverage, test } from './fixtures';
+
+// Copy into frontend/e2e/independent-rereview.spec.ts to run with the existing harness.
+// Independent review specimen. Expects the safe behavior; intentionally exposes a
+// failure at 71cd584. Uses only Playwright's disposable local application and account.
+test('a failed evidence read must not export an authoritative zero-evidence draft', async ({ page, workspace }) => {
+  const pid = await apiProduct(page, asin(91), 'Evidence unavailable specimen');
+  await recordFullCoverage(page, pid);
+  await page.route(`**/api/v1/products/${pid}`, route => route.fulfill({
+    status: 503, contentType: 'application/json',
+    body: JSON.stringify({ detail: 'Independent test: evidence read temporarily unavailable' }),
+  }));
+  await page.goto(`/decisions?product=${pid}`);
+  await fillDecisionInputs(page);
+  const draft = await downloadJson(page, () => page.getByRole('button', { name: 'Export this draft' }).click());
+  await page.getByRole('button', { name: 'Save this decision' }).click();
+  await expect(page.getByText(/That assessment is immutable/)).toBeVisible();
+  const saved = await downloadJson(page, () => page.getByRole('button', { name: 'Export saved assessment' }).click());
+  expect(workspace.workspace).toBe('E2E workspace');
+  expect(draft.body.assessment.confidence, JSON.stringify({
+    draft: { confidence: draft.body.assessment.confidence, decision: draft.body.assessment.decision,
+             evidence: draft.body.evidence.length },
+    saved: { confidence: saved.body.assessment.confidence, decision: saved.body.assessment.decision,
+             evidence: saved.body.evidence.length },
+  })).toBe(saved.body.assessment.confidence);
+});
