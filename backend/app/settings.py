@@ -23,6 +23,11 @@ class Settings:
     #: are fleet-wide, so they are not a workspace's to read: owning a workspace is not
     #: operating the service. Unset means the surface is off, which is the default.
     metrics_token: str = ''
+    #: How long readiness may reuse its physical-schema verdict (review finding R09).
+    #: Inspecting tables and columns on every probe would make a liveness-frequency
+    #: endpoint do real work; a changed revision refreshes the verdict regardless of
+    #: this interval, so it only bounds how long an *unrecorded* schema change hides.
+    schema_recheck_seconds: float = 30.0
 
     @classmethod
     def from_env(cls):
@@ -47,10 +52,15 @@ class Settings:
                 raise ValueError(f'{name} must be between 1 and 100000')
             return value
 
+        recheck = float(os.getenv('SCHEMA_RECHECK_SECONDS', '30'))
+        if recheck < 0 or recheck > 3600:
+            raise ValueError('SCHEMA_RECHECK_SECONDS must be between 0 and 3600')
+
         return cls(env, url, origins,
                    os.getenv('ALLOW_REGISTRATION', 'false' if env == 'production' else 'true') == 'true', limit,
                    hourly('LOGIN_IP_HOURLY_LIMIT', 30),
                    hourly('LOGIN_ACCOUNT_HOURLY_LIMIT', 10),
                    hourly('REGISTER_IP_HOURLY_LIMIT', 10),
                    hourly('WORKSPACE_WRITE_MINUTE_LIMIT', 60),
-                   os.getenv('METRICS_TOKEN', ''))
+                   os.getenv('METRICS_TOKEN', ''),
+                   recheck)

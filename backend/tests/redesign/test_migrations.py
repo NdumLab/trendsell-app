@@ -10,10 +10,13 @@ Two adoption paths must both hold, and neither may destroy data:
 * a database whose schema already matches is *stamped*, never re-created.
 """
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
 from app import migrate
 from app.db import Database, Record, Workspace
+from app.main import create_app
+from app.settings import Settings
 from conftest import POSTGRES_URL, postgres_schema_url
 
 
@@ -223,10 +226,127 @@ def test_readiness_reports_ready_once_the_schema_is_at_head(client):
     response = client.get('/api/ready')
     assert response.status_code == 200
     assert response.json() == {'status': 'ready', 'database': 'ok',
-                               'schema_revision': head, 'expected_revision': head}
+                               'schema_revision': head, 'expected_revision': head,
+                               'schema_matches_models': True}
 
 
 def test_liveness_stays_independent_of_the_database(client):
     body = client.get('/api/health').json()
     assert body['status'] == 'ok'
     assert body['demo'] is False
+
+
+# --- Readiness inspects the physical schema, not only the revision label (R09) ------
+
+@pytest.fixture
+def eager_client(database_url):
+    """A client whose readiness never reuses a cached schema verdict.
+
+    The production default reuses its verdict for 30 seconds so a liveness-frequency
+    probe does not inspect tables on every call. These tests are about *what* the
+    inspection concludes, so they set the interval to zero rather than sleeping.
+    """
+    settings = Settings(environment='test', database_url=database_url,
+                        origins=('http://localhost:3000',), schema_recheck_seconds=0)
+    with TestClient(create_app(settings)) as client:
+        yield client
+
+
+def break_schema(engine, statement):
+    with engine.begin() as connection:
+        connection.execute(text(statement))
+
+
+def set_revision(engine, revision):
+    """Rewrite the recorded revision the way a migration would.
+
+    `stamp_engine` deliberately refuses to overwrite an existing revision, so these
+    tests write the row directly to stage a database whose *label* says one thing.
+    """
+    with engine.begin() as connection:
+        connection.execute(text('DELETE FROM alembic_version'))
+        connection.execute(text('INSERT INTO alembic_version (version_num) VALUES (:v)'),
+                           {'v': revision})
+
+
+def test_readiness_rejects_a_head_revision_whose_tables_are_missing(eager_client):
+    """Review finding R09: the revision row is a claim about the schema, not the schema.
+
+    A database migrated to head and then missing `audit_events` answered `SELECT 1`,
+    still carried the 0003 row, and reported ready — while every audited write against
+    it would have failed.
+    """
+    head = migrate.head_revision('sqlite://')
+    engine = eager_client.app.state.database.engine
+    migrate.stamp_engine(engine, head)
+    assert eager_client.get('/api/ready').status_code == 200
+
+    break_schema(engine, 'DROP TABLE audit_events')
+
+    response = eager_client.get('/api/ready')
+    assert response.status_code == 503
+    body = response.json()
+    assert body['status'] == 'schema_incomplete'
+    # The revision label is untouched: only inspection can catch this.
+    assert body['schema_revision'] == head == body['expected_revision']
+    assert body['schema_matches_models'] is False
+    # Named, so an operator knows what to restore rather than only that it failed.
+    assert 'audit_events' in body['missing_tables']
+
+
+def test_readiness_rejects_a_head_revision_whose_column_is_missing(eager_client):
+    """A table can be present and still not be the table the models declare."""
+    head = migrate.head_revision('sqlite://')
+    engine = eager_client.app.state.database.engine
+    migrate.stamp_engine(engine, head)
+    assert eager_client.get('/api/ready').status_code == 200
+
+    break_schema(engine, 'ALTER TABLE audit_events DROP COLUMN detail')
+
+    body = eager_client.get('/api/ready').json()
+    assert body['status'] == 'schema_incomplete'
+    assert body['schema_matches_models'] is False
+    assert body['missing_columns']['audit_events'] == ['detail']
+    # The table itself is present, so a table-only check would have passed this database.
+    assert body['missing_tables'] == []
+
+
+def test_a_wrong_revision_is_reported_as_a_mismatch_not_an_incomplete_schema(eager_client):
+    """The two failures are distinct: a stale label and a broken schema differ in remedy."""
+    migrate.stamp_engine(eager_client.app.state.database.engine, migrate.BASELINE)
+    body = eager_client.get('/api/ready').json()
+    assert body['status'] == 'schema_mismatch'
+    assert body['schema_revision'] == migrate.BASELINE
+    # The physical schema is fine here; only the recorded revision is behind.
+    assert body['schema_matches_models'] is True
+
+
+def test_readiness_rechecks_the_schema_as_soon_as_the_revision_changes(client):
+    """The cache must not outlive a migration: a revision change refreshes immediately.
+
+    Without this, a deploy that migrated between two probes would keep serving the
+    previous verdict for the whole recheck interval. This uses the *default* client, so
+    the 30-second interval is in force and only the revision change can explain the
+    refreshed answer.
+    """
+    engine = client.app.state.database.engine
+    migrate.stamp_engine(engine, migrate.BASELINE)
+    assert client.get('/api/ready').json()['status'] == 'schema_mismatch'
+
+    set_revision(engine, migrate.head_revision('sqlite://'))
+    # No sleep: the changed revision, not the elapsed interval, forces the re-inspection.
+    assert client.get('/api/ready').json()['status'] == 'ready'
+
+
+def test_readiness_does_not_inspect_the_schema_on_every_probe(client, monkeypatch):
+    """R09 asked for this check *without* making a liveness-frequency endpoint do real work."""
+    migrate.stamp_engine(client.app.state.database.engine, migrate.head_revision('sqlite://'))
+    client.get('/api/ready')
+
+    calls = []
+    original = migrate.schema_report
+    monkeypatch.setattr(migrate, 'schema_report',
+                        lambda engine, *a, **k: (calls.append(1), original(engine, *a, **k))[1])
+    for _ in range(5):
+        assert client.get('/api/ready').status_code == 200
+    assert calls == []

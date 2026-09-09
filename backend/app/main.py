@@ -346,25 +346,63 @@ def create_app(settings=None):
         """Liveness: the process is up. Deliberately does not touch the database."""
         return {'status':'ok', 'version':'2.0.0', 'demo':False}
 
+    #: Readiness re-inspects the physical schema at most this often (settings, default 30s).
+    #: Inspecting tables and columns on every probe would make a liveness-frequency endpoint
+    #: do real work; never inspecting at all is what review finding R09 caught.
+    schema_check = {'at': 0.0, 'revision': None, 'matches': False, 'missing_tables': [],
+                    'missing_columns': {}}
+
+    def schema_state():
+        """The cached physical-schema verdict, refreshed when it is stale.
+
+        A revision label is a claim *about* the schema, not the schema. Review finding
+        R09: a database migrated to head and then missing `audit_events` answered
+        `SELECT 1`, still carried the 0003 row, and reported ready — while every audited
+        write would have failed. So the tables and columns the models declare are actually
+        inspected, and a changed revision refreshes the verdict immediately.
+        """
+        try:
+            revision = migrate.current_revision(database.engine)
+        except Exception:
+            revision = None
+        stale = (time.monotonic() - schema_check['at']) > settings.schema_recheck_seconds
+        if stale or revision != schema_check['revision']:
+            try:
+                report = migrate.schema_report(database.engine)
+            except Exception:
+                report = {'matches_models': False, 'missing_tables': ['<schema unreadable>'],
+                          'missing_columns': {}}
+            schema_check.update(at=time.monotonic(), revision=revision,
+                                matches=report['matches_models'],
+                                missing_tables=report['missing_tables'],
+                                missing_columns=report['missing_columns'])
+        return schema_check
+
     @app.get('/api/ready')
     def ready(response: Response, db=Depends(get_db)):
-        """Readiness: the database answers *and* carries the schema this code expects.
+        """Readiness: the database answers, is at the expected revision, *and* has the
+        schema that revision promises.
 
-        `SELECT 1` proves connectivity, not that a migration has run (action plan P01).
-        A database at the wrong revision is reported as not ready rather than serving
-        requests against a schema the code does not match.
+        `SELECT 1` proves connectivity, a revision row proves a migration was recorded,
+        and only inspection proves the tables and columns are there (P01, R09).
         """
         db.execute(text('SELECT 1'))
         expected = migrate.head_revision(settings.database_url)
-        try:
-            actual = migrate.current_revision(database.engine)
-        except Exception:
-            actual = None
-        ready_now = actual == expected
+        state = schema_state()
+        actual = state['revision']
+        at_revision = actual == expected
+        ready_now = at_revision and state['matches']
         if not ready_now:
             response.status_code = 503
-        return {'status':'ready' if ready_now else 'schema_mismatch', 'database':'ok',
-                'schema_revision':actual, 'expected_revision':expected}
+        status = 'ready' if ready_now else ('schema_mismatch' if not at_revision else 'schema_incomplete')
+        body = {'status':status, 'database':'ok',
+                'schema_revision':actual, 'expected_revision':expected,
+                'schema_matches_models':state['matches']}
+        if not state['matches']:
+            # Named, so an operator knows what to restore rather than only that it failed.
+            body['missing_tables'] = state['missing_tables']
+            body['missing_columns'] = state['missing_columns']
+        return body
 
     @app.get('/api/v1/config')
     def config():
