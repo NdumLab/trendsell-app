@@ -76,13 +76,14 @@ class Audit(Base):
     created_at = Column(String, nullable=False, default=now, index=True)
 
 class RecoveryToken(Base):
-    """A single-use, purpose-bound, short-lived credential sent to a verified address.
+    """A single-use, purpose-bound, short-lived account-security credential.
 
-    Only the hash is stored: the token itself exists in the message and nowhere else, so a
-    database copy cannot be used to take over an account (action plan P03). `purpose` is
-    part of the lookup, so a token minted for one action cannot be replayed against
-    another. `used_at` makes it single-use without deleting the row, which keeps a reuse
-    attempt auditable rather than indistinguishable from an expired one.
+    Only the hash is stored: the token itself exists in the message or the operator's
+    one-time handoff, so a database copy cannot be used to take over an account (action
+    plan P03). `purpose` is part of the lookup, so a token minted for one action cannot be
+    replayed against another. `used_at` makes it single-use without deleting the row during
+    its validity window, which keeps a reuse attempt distinguishable from a token that never
+    existed. The startup sweep removes the row after its original expiry.
     """
     __tablename__ = 'recovery_tokens'
     token_hash = Column(String, primary_key=True)

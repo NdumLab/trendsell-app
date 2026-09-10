@@ -2,8 +2,8 @@
 
 Review finding 11: the size check read `Content-Length` alone, so a chunked body that
 never declares a length was not counted — a 40,032-byte chunked confirmation returned 200
-against a 32 KiB limit. The deployed nginx caps API bodies at 64 KiB independently, which
-limited the exposure, but the application must not rely on a proxy it does not control.
+against a 32 KiB limit. The production nginx template now enforces the same ceiling, but
+the application must not rely on a proxy it does not control.
 
 Review finding 10: one bucket of 20 requests per IP per hour covered login and
 registration together. That inconveniences a shared network while giving no account-level
@@ -13,9 +13,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.db import RateBucket, Session
+from app.db import RateBucket, RecoveryToken, Session
 from app.limits import MAX_BODY_BYTES
-from app.security import purge_expired
+from app.security import keyed_hash, purge_expired, token_hash
 from conftest import HEADERS, PASSWORD, register
 
 AMAZON = 'https://www.amazon.com/dp/B0ABCDEFGH'
@@ -81,6 +81,15 @@ def test_reads_are_not_size_limited(client, product):
 
 # --- Authentication limits ---------------------------------------------------------
 
+def test_rate_limit_keys_do_not_store_the_raw_network_address(app, owner):
+    """Low-entropy addresses need a keyed digest, not enumerable plain SHA-256."""
+    with app.state.database.session() as db:
+        keys = [row.key for row in db.query(RateBucket).all()]
+    assert keys, 'registration must have created a network rate window'
+    assert all('testclient' not in key for key in keys)
+    assert all(token_hash('testclient') not in key for key in keys)
+    assert any(keyed_hash('testclient', app.state.settings.rate_key_secret) in key for key in keys)
+
 def test_sign_in_attempts_are_limited_per_account(client, owner):
     """A limit that follows the account, not only the address it came from."""
     client.post('/api/v1/auth/logout', json={}, headers=HEADERS)
@@ -126,17 +135,23 @@ def test_registration_has_its_own_limit_separate_from_sign_in(client):
 
 # --- Cleanup -----------------------------------------------------------------------
 
-def test_expired_sessions_and_finished_windows_are_removed(client, owner):
+def test_expired_sessions_credentials_and_finished_windows_are_removed(client, owner):
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     with client.app.state.database.session() as db:
         db.add(Session(token_hash='expired-session', user_id=owner['id'], expires_at=past))
+        db.add(RecoveryToken(token_hash='expired-recovery', user_id=owner['id'],
+                             purpose='password_reset', expires_at=past))
+        db.add(RecoveryToken(token_hash='live-recovery', user_id=owner['id'],
+                             purpose='password_reset', expires_at=future))
         db.add(RateBucket(key='finished-window', count=5, expires_at=past))
         db.add(RateBucket(key='active-window', count=1, expires_at=future))
         db.commit()
         removed = purge_expired(db)
-        assert removed == {'sessions': 1, 'rate_buckets': 1}
+        assert removed == {'sessions': 1, 'recovery_tokens': 1, 'rate_buckets': 1}
         assert db.get(Session, 'expired-session') is None
+        assert db.get(RecoveryToken, 'expired-recovery') is None
+        assert db.get(RecoveryToken, 'live-recovery') is not None
         assert db.get(RateBucket, 'finished-window') is None
         assert db.get(RateBucket, 'active-window').count == 1
 

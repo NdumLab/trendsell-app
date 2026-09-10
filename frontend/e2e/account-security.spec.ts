@@ -77,6 +77,33 @@ test('the reset request says the same thing for an address with no workspace', a
   await expect(dialog.getByLabel('Reset token')).toBeVisible();
 });
 
+test('a deployment without mail does not claim that it sent a reset message', async ({ page }) => {
+  await page.route('**/api/v1/config', async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({ response, json: { ...body, mail_delivery_configured: false } });
+  });
+  await page.route('**/api/v1/auth/recovery/request', route => route.fulfill({
+    status: 202,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      detail: 'If the account exists, recovery instructions are available.',
+      delivery_configured: false,
+    }),
+  }));
+
+  await page.context().clearCookies();
+  const dialog = await openAuthDialog(page);
+  await dialog.getByRole('button', { name: 'Forgot your password?' }).click();
+  await expect(dialog.getByText(/no mail transport configured/i)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Continue to token' })).toBeVisible();
+  await dialog.getByLabel('Email address').fill('owner@example.test');
+  await dialog.getByRole('button', { name: 'Continue to token' }).click();
+
+  await expect(page.getByText(/No message was sent/)).toBeVisible();
+  await expect(dialog.getByLabel('Reset token')).toBeVisible();
+});
+
 test('a person can prove they own their address', async ({ page, workspace }) => {
   await page.goto('/settings');
   await expect(page.getByText('Not verified')).toBeVisible();

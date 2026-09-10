@@ -1,0 +1,16 @@
+# Daily timer for the TrendSell backup one-shot. The randomized delay avoids assuming an
+# exact recovery point and prevents every small deployment from starting at the same second.
+# Install/enable only after the owner approves the schedule and resulting RPO.
+
+[Unit]
+Description=Run the TrendSell PostgreSQL backup daily
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 UTC
+RandomizedDelaySec=30m
+AccuracySec=5m
+Persistent=true
+Unit=trendsell-backup.service
+
+[Install]
+WantedBy=timers.target

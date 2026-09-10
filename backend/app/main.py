@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from . import migrate
 from .settings import Settings
 from .db import Database, Workspace, User, Session, RecoveryToken, Record, Audit, RateBucket, records, audit, now, uid
-from .security import dummy_verify, hash_password, verify_password, token_hash, consume, purge_expired, resolve_input
+from .security import dummy_verify, hash_password, verify_password, keyed_hash, token_hash, consume, purge_expired, resolve_input
 from .limits import BodyLimit, MAX_BODY_BYTES
 from .observability import Counters, REQUEST_ID, USER_ID, WORKSPACE_ID, logger, new_request_id, route_label
 from .permissions import matrix, require
@@ -139,6 +139,10 @@ def create_app(settings=None):
     settings = settings or Settings.from_env()
     database = Database(settings.database_url)
 
+    def rate_identity(value):
+        """HMAC low-entropy identifiers before they enter the shared rate table."""
+        return keyed_hash(value, settings.rate_key_secret)
+
     @asynccontextmanager
     async def lifespan(app):
         if settings.environment != 'production':
@@ -151,8 +155,8 @@ def create_app(settings=None):
                     p.update(status='partial', events=p['events']+[{'id':len(p['events'])+1,'step':'Investigation interrupted', 'status':'unavailable','detail':'The service restarted. Refresh the investigation to try again.', 'at':now()}])
                     job.payload = p
             db.commit()
-            # Expired sessions and finished rate windows accumulate otherwise; only rows
-            # whose own expiry has passed are removed (action plan P04).
+            # Expired sessions, recovery credentials and finished rate windows accumulate
+            # otherwise; only rows whose own expiry has passed are removed (action plan P04).
             purge_expired(db)
         yield
         database.engine.dispose()
@@ -184,6 +188,17 @@ def create_app(settings=None):
         return {'workspace_id': state.get('workspace_id', '-'),
                 'user_id': state.get('user_id', '-')}
 
+    def protect_response(response, identifier):
+        """Apply the headers every response needs, including an internal failure."""
+        response.headers['X-Request-ID'] = identifier
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        response.headers['Cache-Control'] = 'no-store'
+        if settings.environment == 'production':
+            response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+        return response
+
     @app.middleware('http')
     async def guard(request, call_next):
         # One id per request: returned to the caller, written on every log line, and
@@ -211,22 +226,28 @@ def create_app(settings=None):
                 'method': request.method, 'route': route_label(request.url.path, matched),
                 'status': response.status_code, 'duration_ms': round(duration_ms, 1),
                 **identity(request)}})
-            response.headers['X-Request-ID'] = identifier
-            response.headers['X-Content-Type-Options'] = 'nosniff'
-            response.headers['X-Frame-Options'] = 'DENY'
-            response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-            response.headers['Cache-Control'] = 'no-store'
-            if settings.environment == 'production':
-                response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-            return response
+            return protect_response(response, identifier)
         except Exception:
             duration_ms = (time.perf_counter() - started) * 1000
             matched = request.scope.get('route')
             counters.record(request.method, request.url.path, 500, duration_ms, matched)
             logger.exception('request failed', extra={'request_id': identifier, 'context': {
                 'method': request.method, 'route': route_label(request.url.path, matched),
-                'duration_ms': round(duration_ms, 1), **identity(request)}})
-            raise
+                'status': 500, 'duration_ms': round(duration_ms, 1), **identity(request)}})
+            # Do not re-raise into Uvicorn: its default error logger would emit the full
+            # exception text and traceback after our structured logger deliberately
+            # redacted them. The request id and exception class above retain correlation;
+            # the caller receives one generic response with the same id.
+            response = protect_response(
+                JSONResponse({'detail': 'Internal server error.'}, status_code=500), identifier)
+            # This response is produced outside the inner CORS middleware, so preserve its
+            # allowed-origin behavior explicitly for this one path.
+            origin = request.headers.get('origin')
+            if origin in settings.origins:
+                response.headers['Access-Control-Allow-Origin'] = origin
+                response.headers['Access-Control-Allow-Credentials'] = 'true'
+                response.headers['Vary'] = 'Origin'
+            return response
         finally:
             REQUEST_ID.reset(request_token)
             WORKSPACE_ID.reset(workspace_token)
@@ -447,7 +468,7 @@ def create_app(settings=None):
     @app.post('/api/v1/auth/register', status_code=201)
     def register(payload: Credentials, request: Request, response: Response, db=Depends(get_db)):
         if not settings.allow_registration: raise HTTPException(403, 'Registration is closed. Contact your workspace owner.')
-        consume(db, f'register:{request.client.host}:{now()[:13]}', settings.register_ip_hourly_limit,
+        consume(db, f'register:{rate_identity(request.client.host)}:{now()[:13]}', settings.register_ip_hourly_limit,
                 message='Too many workspaces created from this address. Try again later.')
         workspace = Workspace(name=payload.name)
         db.add(workspace)
@@ -464,9 +485,10 @@ def create_app(settings=None):
             # a registration that succeeded; the person can ask for the link again.
             try:
                 send_verification(db, user)
-            except mail.MailNotConfigured:
+            except Exception as problem:
                 logger.warning('verification mail undelivered',
-                               extra={'context': {'purpose': EMAIL_PURPOSE}})
+                               extra={'context': {'purpose': EMAIL_PURPOSE,
+                                                  'error_type': type(problem).__name__}})
         return view
 
     @app.post('/api/v1/auth/login')
@@ -475,9 +497,9 @@ def create_app(settings=None):
         # shared network is one address; the account limit is what actually bounds guessing
         # against one person, including from many addresses.
         email = payload.email.lower().strip()
-        consume(db, f'login-ip:{request.client.host}:{now()[:13]}', settings.login_ip_hourly_limit,
+        consume(db, f'login-ip:{rate_identity(request.client.host)}:{now()[:13]}', settings.login_ip_hourly_limit,
                 message='Too many sign-in attempts from this address. Try again later.')
-        consume(db, f'login-account:{token_hash(email)}:{now()[:13]}', settings.login_account_hourly_limit,
+        consume(db, f'login-account:{rate_identity(email)}:{now()[:13]}', settings.login_account_hourly_limit,
                 message='Too many sign-in attempts for this account. Try again later.')
         user = db.query(User).filter_by(email=email).first()
         if not user:
@@ -510,7 +532,8 @@ def create_app(settings=None):
     # Delivery is still blocked on a provider decision, so nothing here sends mail by
     # itself: it hands a `Message` to whatever transport is configured, and the default
     # transport refuses. Everything either side of that seam is implemented and tested
-    # against a local sink, so switching on a provider is configuration, not development.
+    # against a local sink. A real provider still requires a transport implementation,
+    # configuration, delivery monitoring and a release; the runbook says so explicitly.
     #
     # Review finding R02 made this urgent rather than merely planned: a normalisation bug
     # locked valid accounts out, and there was no way for an affected person to get back
@@ -582,9 +605,9 @@ def create_app(settings=None):
         email = payload.email.lower().strip()
         # Two limits, matching sign-in: the address bound stops bulk probing, the account
         # bound stops someone flooding one person's inbox from many addresses.
-        consume(db, f'recover-ip:{request.client.host}:{now()[:13]}', settings.register_ip_hourly_limit,
+        consume(db, f'recover-ip:{rate_identity(request.client.host)}:{now()[:13]}', settings.register_ip_hourly_limit,
                 message='Too many recovery requests from this address. Try again later.')
-        consume(db, f'recover-account:{token_hash(email)}:{now()[:13]}', settings.login_account_hourly_limit,
+        consume(db, f'recover-account:{rate_identity(email)}:{now()[:13]}', settings.login_account_hourly_limit,
                 message='Too many recovery requests. Check your inbox, or try again later.')
         user = db.query(User).filter_by(email=email).first()
         if user and mailer.configured:
@@ -599,17 +622,23 @@ def create_app(settings=None):
                           f'Reset token: {token}\n\n'
                           f'It can be used once, and expires in {RESET_TTL_MINUTES} minutes.\n'
                           'If this was not you, no action is needed: nothing has changed.')))
-            except mail.MailNotConfigured:
-                # The token is already spent-on-issue; log the failure and still answer
-                # identically. A delivery outage must not become an enumeration signal.
-                logger.warning('recovery mail undelivered', extra={'context': {'purpose': RESET_PURPOSE}})
+            except Exception as problem:
+                # Log the failure and still answer identically. A delivery outage must not
+                # become an enumeration signal. Provider transports should report delivery
+                # failure before accepting a message; the credential expires quickly and a
+                # later request supersedes it.
+                logger.warning('recovery mail undelivered',
+                               extra={'context': {'purpose': RESET_PURPOSE,
+                                                  'error_type': type(problem).__name__}})
         elif user:
             # A real account, but nothing can carry the token. Recorded so an operator can
             # see that recovery is being asked for while delivery is unconfigured.
             logger.warning('recovery requested with no mail transport',
                            extra={'context': {'purpose': RESET_PURPOSE}})
         return {'status': 'accepted',
-                'detail': 'If that address has a workspace, a reset link is on its way.',
+                'detail': ('If that address has a workspace and delivery succeeds, reset instructions will arrive.'
+                           if mailer.configured else
+                           'No mail transport is configured. Ask an operator for a reset token.'),
                 'delivery_configured': mailer.configured}
 
     @app.post('/api/v1/auth/recovery/reset')
@@ -639,7 +668,10 @@ def create_app(settings=None):
             db.rollback()
             raise HTTPException(400, 'This reset link is no longer valid. Request a new one.')
         user.password_hash = hash_password(payload.password)
-        user.email_verified_at = user.email_verified_at or changed_at
+        # A reset proves possession of a reset credential, not necessarily control of the
+        # account's email address. This distinction matters while the operator procedure
+        # may deliver a token through a separately trusted channel. Only the dedicated
+        # email-verification credential may set `email_verified_at`.
         # A successful security change invalidates every other recovery credential.
         db.query(RecoveryToken).filter(RecoveryToken.user_id == user.id,
                                        RecoveryToken.used_at.is_(None)).update(
@@ -655,16 +687,17 @@ def create_app(settings=None):
     def request_email_verification(request: Request, user=Depends(current_user), db=Depends(get_db)):
         if user.email_verified_at:
             return {'status': 'already_verified', 'delivery_configured': mailer.configured}
-        consume(db, f'verify-ip:{request.client.host}:{now()[:13]}', settings.register_ip_hourly_limit,
+        consume(db, f'verify-ip:{rate_identity(request.client.host)}:{now()[:13]}', settings.register_ip_hourly_limit,
                 message='Too many verification requests from this address. Try again later.')
         consume(db, f'verify-account:{user.id}:{now()[:13]}', settings.login_account_hourly_limit,
                 message='Too many verification requests. Check your inbox, or try again later.')
         if mailer.configured:
             try:
                 send_verification(db, user)
-            except mail.MailNotConfigured:
+            except Exception as problem:
                 logger.warning('verification mail undelivered',
-                               extra={'context': {'purpose': EMAIL_PURPOSE}})
+                               extra={'context': {'purpose': EMAIL_PURPOSE,
+                                                  'error_type': type(problem).__name__}})
         return {'status': 'accepted', 'delivery_configured': mailer.configured}
 
     @app.post('/api/v1/auth/email-verification/confirm')
@@ -765,7 +798,12 @@ def create_app(settings=None):
         db.query(Session).filter_by(user_id=user_id).delete(synchronize_session=False)
         db.query(RecoveryToken).filter_by(user_id=user_id).delete(synchronize_session=False)
         db.query(RateBucket).filter(RateBucket.key.like(f'%{workspace_id}%')).delete(synchronize_session=False)
+        db.query(RateBucket).filter(RateBucket.key.like(f'%{rate_identity(email)}%')).delete(synchronize_session=False)
+        # Buckets written before RATE_KEY_SECRET was introduced used a plain SHA-256
+        # address digest. Remove that transition format too instead of retaining it until
+        # the next expiry sweep after an account deletion.
         db.query(RateBucket).filter(RateBucket.key.like(f'%{token_hash(email)}%')).delete(synchronize_session=False)
+        db.query(RateBucket).filter(RateBucket.key.like(f'%{user_id}%')).delete(synchronize_session=False)
         db.delete(user)
         db.delete(workspace)
         db.commit()

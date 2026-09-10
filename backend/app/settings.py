@@ -34,6 +34,9 @@ class Settings:
     #: endpoint do real work; a changed revision refreshes the verdict regardless of
     #: this interval, so it only bounds how long an *unrecorded* schema change hides.
     schema_recheck_seconds: float = 30.0
+    #: HMAC key for network/email rate buckets. Production requires an independent random
+    #: value so their small input spaces cannot be enumerated from a database copy.
+    rate_key_secret: str = 'development-only-rate-key-secret'
 
     @classmethod
     def from_env(cls):
@@ -65,6 +68,17 @@ class Settings:
         transport = os.getenv('MAIL_TRANSPORT', '').strip().lower()
         if transport not in {'', 'sink', 'log'}:
             raise ValueError("MAIL_TRANSPORT must be '', 'sink' or 'log'")
+        if env == 'production' and transport:
+            raise ValueError(
+                'No production mail transport ships with this release. '
+                'MAIL_TRANSPORT must be empty in production; sink and log are '
+                'development diagnostics, not delivery.')
+
+        rate_key_secret = os.getenv(
+            'RATE_KEY_SECRET',
+            'development-only-rate-key-secret' if env != 'production' else '')
+        if env == 'production' and len(rate_key_secret) < 32:
+            raise ValueError('RATE_KEY_SECRET must be an independent random value of at least 32 characters in production')
 
         return cls(env, url, origins,
                    os.getenv('ALLOW_REGISTRATION', 'false' if env == 'production' else 'true') == 'true', limit,
@@ -75,4 +89,5 @@ class Settings:
                    os.getenv('METRICS_TOKEN', ''),
                    transport,
                    os.getenv('MAIL_SINK_DIR', ''),
-                   recheck)
+                   recheck,
+                   rate_key_secret)

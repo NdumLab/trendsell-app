@@ -53,12 +53,12 @@ export function EmailVerification() {
         <Notice kind="amber">Nobody has proved control of this address yet. Existing accounts were
           deliberately not marked verified when verification was added.
           {!delivery.data?.mail_delivery_configured &&
-            ' No mail transport is configured on this deployment, so a verification message cannot be delivered — an operator can issue a token instead.'}
+            ' No mail transport is configured on this deployment, so address verification must wait until delivery is available.'}
         </Notice>
         <div className="stack">
           <button className="button secondary" disabled={busy || !delivery.data?.mail_delivery_configured}
             onClick={async () => { setBusy(true);
-              try { await post('/auth/email-verification/request', {}); toast.success('Verification message sent'); }
+              try { await post('/auth/email-verification/request', {}); toast.success('Verification requested. If delivery succeeds, the message will arrive.'); }
               catch (problem) { toast.error((problem as Error).message); } finally { setBusy(false); } }}>
             <MailCheck size={15}/>Send a verification message
           </button>
@@ -158,19 +158,20 @@ export function DeleteWorkspace() {
   return <section className="panel settings-card danger-card">
     <div className="section-heading"><h2>Delete this workspace</h2><Trash2 size={18}/></div>
     <p>Every product, investigation, evidence record, assessment, quote, watch and audit event
-      in this workspace is removed permanently. This cannot be undone, and no copy is kept.
-      Export your records first if you want them.</p>
+      in this workspace is removed from the live service. This cannot be undone there.
+      Existing operational backups age out under the deployment&apos;s retention policy rather
+      than being edited in place. Export your records first if you want them.</p>
     <button className="button danger" onClick={() => { setError(''); setOpen(true); }}>
       <Trash2 size={15}/>Delete workspace…</button>
     <Modal open={open} onOpenChange={setOpen} title="Delete this workspace"
-      description="This removes every record permanently. There is no undo and no backup copy.">
+      description="This removes every live record permanently. Existing backups expire under the retention policy.">
       <form className="stack" onSubmit={async event => {
         event.preventDefault(); setBusy(true); setError('');
         const data = new FormData(event.currentTarget);
         try {
           await del('/auth/account', { password: data.get('password'), confirmation: data.get('confirmation') });
           setOpen(false); await w.refresh();
-          toast.success('Workspace deleted. Nothing was retained.');
+          toast.success('Workspace deleted from the live service.');
         } catch (problem) { setError((problem as Error).message); } finally { setBusy(false); }
       }}>
         <Notice kind="amber">This deletes the workspace and everything in it, for everyone.</Notice>

@@ -2,8 +2,8 @@
 
 Review finding 11: the size check read `Content-Length` and nothing else, so a chunked
 request that never declares a length was not counted. A 40 KiB chunked body returned 200
-against a 32 KiB limit. The deployed nginx caps API bodies at 64 KiB independently, which
-limited the exposure, but the application must not depend on a proxy it does not control.
+against a 32 KiB limit. The production nginx template now enforces that same 32 KiB ceiling,
+but the application must not depend on a proxy it does not control.
 
 `BodyLimit` is deliberately raw ASGI rather than an `@app.middleware('http')` function:
 only at that level can the request body be counted as it arrives and then replayed to the

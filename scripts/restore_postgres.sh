@@ -41,8 +41,16 @@ fi
 
 psql "$admin" -c "CREATE DATABASE \"$target\""
 
-# Derive the target URL from the admin URL by swapping the database component.
-restore_url="${admin%/*}/$target"
+# Derive the target URL by swapping only the database path. Preserve libpq query options
+# such as sslmode; appending the name after an existing query silently produces a bad URL.
+if [[ "$admin" == *\?* ]]; then
+  options="?${admin#*\?}"
+  admin_without_options="${admin%%\?*}"
+else
+  options=""
+  admin_without_options="$admin"
+fi
+restore_url="${admin_without_options%/*}/$target$options"
 pg_restore --dbname="$restore_url" --no-owner --no-privileges --exit-on-error "$dump"
 
 echo "restored $dump into $target"

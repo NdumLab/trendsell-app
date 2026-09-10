@@ -75,25 +75,29 @@ back a bad schema change means restoring a backup, not downgrading.
 
 ## Turning on account recovery
 
-This is **not** configuration alone. `mail.build()` accepts `sink`, `log` and empty, so a
-real provider needs a new transport class and a branch in `build()` — a code change and a
-release — plus the environment setting. Nothing that *calls* `send()` changes, which is
-the point of the seam, but the build does. Before switching it on, two decisions have to
+This is **not** configuration alone. `mail.build()` accepts `sink`, `log` and empty, but
+`sink` and `log` are diagnostics rather than delivery and production settings reject both.
+A real provider needs a transport class and a branch in `build()` — a code change, tests
+and a release — plus the environment setting. Nothing that *calls* `send()` changes, which
+is the point of the seam, but the build does. Before switching it on, two decisions have to
 be made that are not engineering's to make: which provider sends the mail, and whether
 addresses must be verified before recovery will deliver to them.
 
 1. Choose a provider and a sending identity, and configure SPF/DKIM for it.
 2. Add a transport class to `backend/app/mail.py` — one `send()` that takes a `Message` —
    and a branch in `build()`. Nothing that calls `send()` changes.
-3. Set `MAIL_TRANSPORT` in `/etc/trendsell/trendsell.env` and restart.
+3. Add the provider's transport name to production settings validation, set
+   `MAIL_TRANSPORT` in `/etc/trendsell/trendsell.env`, and restart.
 4. Verify against a disposable account: request a reset, confirm the message arrives,
    redeem it, and confirm every session for that account ended.
 5. Verify ownership end to end on the same account: register, confirm the verification
    message arrives, redeem it, and confirm `email_verified` becomes true.
 
 `MAIL_TRANSPORT=sink` writes messages to `MAIL_SINK_DIR` instead of sending them. It is
-for development and tests, and must never be set in production: a reset token is a bearer
-credential, and the sink writes it to disk in the clear.
+for development and tests: a reset token is a bearer credential, and the sink can write it
+to disk in the clear. `MAIL_TRANSPORT=log` records an attempted message without its address
+or body; it reports delivery as unavailable and mints no token. Both values are rejected
+when `APP_ENV=production`.
 
 ## A locked-out user, while no mail transport is configured
 
@@ -124,12 +128,17 @@ through a channel you already trust, not through the address in the request.
    sudo -u trendsell /opt/trendsell/venv/bin/python - <<'EOF'
    import secrets
    from datetime import datetime, timedelta, timezone
+   from sqlalchemy import select
    from app.db import Database, RecoveryToken, User, now
    from app.security import token_hash
    from app.settings import Settings
    token = secrets.token_urlsafe(32)
    with Database(Settings.from_env().database_url).session() as db:
-       user = db.query(User).filter_by(email='person@example.com').one()
+       # Take the same account lock as issuance, redemption and password change in the API.
+       # Without it, an operator-issued token can race a password change and survive it.
+       user = db.execute(
+           select(User).where(User.email == 'person@example.com').with_for_update()
+       ).scalar_one()
        # Spend any outstanding token first, exactly as the API does.
        db.query(RecoveryToken).filter_by(user_id=user.id, purpose='password_reset',
                                          used_at=None).update({'used_at': now()})
@@ -144,31 +153,41 @@ through a channel you already trust, not through the address in the request.
 
 3. Give the token to the person over the trusted channel. They enter it under **Forgot
    your password?** in the sign-in dialog. Redeeming it ends every session on the
-   account, which is the point.
+   account, which is the point. It does **not** mark the account's email verified: control
+   of a different trusted channel is not proof of control of that address.
 
 4. Record what you did: who asked, how you verified them, when, and that the token was
    issued. The application audits the redemption (`auth.password_reset`) but cannot audit
    your decision to trust the request.
 
-Never read, copy or set `password_hash` directly, and never send a token to the address
-in the request before you have verified it by another route. The same procedure issues an
-`email_verification` token — change the `purpose` and use a 24-hour expiry.
+Never read, copy or set `password_hash` directly, and never send a reset token to the
+address in the request before you have verified the requester by another route. Do not use
+this procedure to mark an email address verified: verification requires delivering the
+purpose-bound verification credential to that address, which waits on a real provider.
 
 ## Releasing
 
 1. Build and test the artifact: backend suite (SQLite and PostgreSQL), frontend unit and
    contract tests, TypeScript, production build, browser suite, dependency and secret
    scans. See `.github/workflows/ci.yml` for the exact commands.
-2. Back up the production database and verify the dump is readable.
-3. `python -m app.migrate check` against production. Record the revision you are moving
+2. Confirm pilot users received the current privacy notice and record retention for the
+   journal, nginx logs, audit events and backups. Recovery-credential hashes are already
+   swept after their original expiry.
+3. Back up the production database and verify the dump restores and replays against a
+   separate database.
+4. `python -m app.migrate check` against production. Record the revision you are moving
    from — that is the rollback target for the application version, not for the schema.
-4. Deploy the application. Install `deploy/trendsell.service.template` and
+5. Deploy the application. Install `deploy/trendsell.service.template` and
    `deploy/nginx-trendsell.conf.template`; secrets come from `/etc/trendsell/trendsell.env`,
    whose variables are documented in `deploy/trendsell.env.template` and which is never
-   committed.
-5. `python -m app.migrate upgrade`.
-6. `systemctl restart trendsell` and confirm `/api/ready` returns 200.
-7. Smoke: sign in to a designated smoke workspace, open a product, save a scenario,
+   committed. Generate `RATE_KEY_SECRET` independently from every database, metrics or
+   provider credential; production refuses values shorter than 32 characters.
+6. `python -m app.migrate upgrade`.
+7. `systemctl restart trendsell` and confirm `/api/ready` returns 200.
+8. Verify the installed Uvicorn command includes `--no-access-log` and nginx uses
+   `trendsell_safe`; make a request containing a disposable marker and confirm the marker,
+   raw path, query and client address do not enter the application or access logs.
+9. Smoke: sign in to a designated smoke workspace, open a product, save a scenario,
    download the saved assessment, and confirm the export reconciles with `/api/v1/summary`.
 
 Prefer additive migrations with explicit backfills, so the previous application version can
@@ -191,11 +210,29 @@ readiness, or any evidence of record loss.
 `scripts/restore_postgres.sh` restores one into a **separate** database and refuses to
 write over an existing one. `scripts/verify_restore.py` then checks the restored copy:
 table counts, per-workspace record counts, and that saved assessments still replay to the
-values they were stored with.
+values they were stored with. A failed/interrupted dump stays under a hidden `.partial`
+name and is removed; only a dump that `pg_restore --list` can read is atomically published.
 
     scripts/backup_postgres.sh                     # writes to $TRENDSELL_BACKUP_DIR
     scripts/restore_postgres.sh <dump> <new-db>    # never touches the live database
     python scripts/verify_restore.py --url <restored-url> --expect <counts.json>
+
+The repository includes an opt-in daily systemd one-shot and timer. Do not enable them
+until the backup location, retention, access owner and acceptable recovery point are
+approved. Once they are, install and validate them:
+
+    install -d -o trendsell -g trendsell -m 0700 /var/backups/trendsell
+    install -o root -g root -m 0644 deploy/trendsell-backup.service.template /etc/systemd/system/trendsell-backup.service
+    install -o root -g root -m 0644 deploy/trendsell-backup.timer.template /etc/systemd/system/trendsell-backup.timer
+    systemd-analyze verify /etc/systemd/system/trendsell-backup.service /etc/systemd/system/trendsell-backup.timer
+    systemctl daemon-reload
+    systemctl enable --now trendsell-backup.timer
+    systemctl start trendsell-backup.service
+    systemctl status trendsell-backup.service trendsell-backup.timer
+
+Confirm the first dump exists, is mode `0600`, passes `pg_restore --list`, and is copied to
+the approved off-host location. Record the observed completion time and test a separate
+restore before treating the schedule as recovery capability.
 
 Status of the operational parts (action plan P06):
 
@@ -203,7 +240,7 @@ Status of the operational parts (action plan P06):
 | --- | --- |
 | Backup and restore scripts | Present in `scripts/`. Drill run 2026-09-08 against a disposable PostgreSQL 16.4 instance: two workspaces, 30 records, 6 saved assessments. The restored copy reported the same schema revision, identical per-workspace counts, all 6 assessments replaying to their stored values, and cross-workspace reads still returning 404. The script refused to restore over an existing database and rejected a non-alphanumeric database name. |
 | Restore drill on production data | **Not performed.** Requires production access and a decision by the owner |
-| Scheduled backups, retention, offsite copy | **Not configured.** Needs a storage location and retention decision |
+| Scheduled backups, retention, offsite copy | Hardened daily service/timer templates are present but **not installed or enabled**. Their default is 14 local days; the owner still needs to approve the location, retention, RPO and off-host copy. |
 | Recovery point and recovery time objectives | **Not agreed.** Record them here once decided |
 
 Do not treat retained customer research as recoverable until the drill has been run against
@@ -214,24 +251,20 @@ a copy of production and the result recorded in this file.
 These are known and tracked, not oversights:
 
 * No scheduled collection runs, so no backup covers collector state — there is none yet.
-* Email delivery is unconfigured (`MAIL_TRANSPORT=`). The reset flow, password change and
-  session revocation are implemented and tested against a local sink, but with no
-  transport the recovery endpoint mints no token and sends nothing — it still answers
-  identically, because the response must never reveal whether an account exists, and its
-  `delivery_configured: false` says no mail is coming. **A locked-out user therefore has
-  no self-service path and needs an operator**, and that procedure is not yet written.
-  Verified email ownership *is* implemented and exercised end to end against the sink;
-  what a provider blocks is delivering the message, not proving ownership. Existing
+* Email delivery is unconfigured (`MAIL_TRANSPORT=`). Password reset/change, session
+  management and email-verification tokens have browser screens and are tested against a
+  local sink. With no production transport the recovery endpoint mints no token and sends
+  nothing; `delivery_configured: false` says no mail is coming. **A locked-out user therefore
+  has no self-service path and needs an operator**, using the procedure above. Existing
   accounts are deliberately left unverified rather than grandfathered (action plan P03).
-* No browser UI exists for recovery, password change, session management, email
-  verification or account deletion. All are API-only, so today they need a client that
-  can send the requests — this is local work, not blocked on the provider.
 * Metrics are behind `METRICS_TOKEN` and are per worker, so a value is a floor rather
   than a fleet total. Owning a workspace does not grant access (review finding R07).
 * No alerting is wired to an on-call destination (action plan P07). Counters are exposed at
-  `GET /api/v1/ops/metrics` for an owner, and every request is logged as JSON with an id;
-  nothing yet forwards either to a paging destination.
-* Account and workspace deletion is not implemented — see
+  `GET /api/v1/ops/metrics` only to the separate operator token, and every request is logged
+  as JSON with an id; nothing yet forwards either to a paging destination.
+* One-person-workspace deletion is implemented in Settings. It removes live rows; backups
+  retain older copies until they age out, so retention and post-restore deletion handling
+  must be agreed before pilot data is accepted. See
   [permissions, privacy and retention](PRIVACY_AND_PERMISSIONS.md).
 
 ## Diagnosing a failure

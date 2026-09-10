@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import mail
-from app.db import Audit, Record, RecoveryToken, Session, User, Workspace
+from app.db import Audit, RateBucket, Record, RecoveryToken, Session, User, Workspace
 from app.main import create_app
 from app.security import token_hash
 from app.settings import Settings
@@ -80,6 +80,26 @@ def test_a_locked_out_user_can_reset_and_sign_in_again(sink_client, sink):
                             headers=HEADERS).status_code == 401
     assert sink_client.post('/api/v1/auth/login', json={'email': owner['email'], 'password': NEW_PASSWORD},
                             headers=HEADERS).status_code == 200
+
+
+def test_a_password_reset_does_not_claim_that_the_email_was_verified(sink_client, sink):
+    """An operator may deliver a reset through a different trusted channel.
+
+    Possession of that credential proves authority to reset; only the dedicated token
+    delivered to the account address proves control of the email address itself.
+    """
+    register(sink_client)
+    assert ask(sink_client).status_code == 202
+    response = sink_client.post('/api/v1/auth/recovery/reset',
+                                json={'token': reset_token(sink), 'password': NEW_PASSWORD},
+                                headers=HEADERS)
+    assert response.status_code == 200, response.text
+    sink_client.post('/api/v1/auth/login',
+                     json={'email': 'owner@example.com', 'password': NEW_PASSWORD},
+                     headers=HEADERS)
+    account = sink_client.get('/api/v1/auth/me').json()
+    assert account['email_verified'] is False
+    assert account['email_verified_at'] is None
 
 
 def test_the_message_is_addressed_to_the_account_and_says_what_it_is_for(sink_client, sink):
@@ -283,6 +303,71 @@ def test_no_token_is_minted_when_nothing_can_deliver_it(client, app):
 def test_the_unconfigured_transport_refuses_rather_than_pretending():
     with pytest.raises(mail.MailNotConfigured):
         mail.UnconfiguredMailer().send(mail.Message('a@example.com', 'subject', 'body'))
+
+
+def test_the_logging_transport_is_not_mistaken_for_delivery(database_url):
+    """Logging a delivery attempt cannot make an inbox receive a bearer credential."""
+    settings = Settings(environment='test', database_url=database_url,
+                        origins=('http://localhost:3000',), allow_registration=True,
+                        mail_transport='log')
+    app = create_app(settings)
+    with TestClient(app) as logged:
+        register(logged)
+        assert logged.get('/api/v1/config').json()['mail_delivery_configured'] is False
+        response = ask(logged)
+        assert response.status_code == 202
+        assert response.json()['delivery_configured'] is False
+        with app.state.database.session() as db:
+            assert db.query(RecoveryToken).count() == 0
+
+
+@pytest.mark.parametrize('transport', ['sink', 'log'])
+def test_diagnostic_mail_transports_are_refused_in_production(monkeypatch, transport):
+    monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv('DATABASE_URL', 'postgresql+psycopg://user:password@db.example/app')
+    monkeypatch.setenv('CORS_ORIGINS', 'https://app.example.com')
+    monkeypatch.setenv('RATE_KEY_SECRET', 'an-independent-production-rate-key-secret')
+    monkeypatch.setenv('MAIL_TRANSPORT', transport)
+    with pytest.raises(ValueError, match='No production mail transport'):
+        Settings.from_env()
+
+
+def test_production_requires_a_non_enumerable_rate_key(monkeypatch):
+    monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv('DATABASE_URL', 'postgresql+psycopg://user:password@db.example/app')
+    monkeypatch.setenv('CORS_ORIGINS', 'https://app.example.com')
+    monkeypatch.setenv('MAIL_TRANSPORT', '')
+    monkeypatch.setenv('RATE_KEY_SECRET', '')
+    with pytest.raises(ValueError, match='RATE_KEY_SECRET'):
+        Settings.from_env()
+    monkeypatch.setenv('RATE_KEY_SECRET', 'an-independent-production-rate-key-secret')
+    settings = Settings.from_env()
+    assert settings.rate_key_secret == 'an-independent-production-rate-key-secret'
+    assert settings.mail_transport == ''
+
+
+def test_a_transport_failure_does_not_reveal_which_account_exists(monkeypatch, database_url):
+    """Delivery failures must not turn recovery or registration into an oracle."""
+    class FailingMailer(mail.Mailer):
+        configured = True
+
+        def send(self, message):
+            raise OSError('diagnostic delivery failure')
+
+    monkeypatch.setattr(mail, 'build', lambda settings: FailingMailer())
+    app = create_app(Settings(environment='test', database_url=database_url,
+                              origins=('http://localhost:3000',), allow_registration=True))
+    with TestClient(app) as failing:
+        account = failing.post('/api/v1/auth/register',
+                               json={'email': 'known@example.com', 'password': PASSWORD,
+                                     'name': 'Known'}, headers=HEADERS)
+        assert account.status_code == 201
+        known = ask(failing, 'known@example.com')
+        unknown = ask(failing, 'unknown@example.com')
+        assert known.status_code == unknown.status_code == 202
+        assert known.json() == unknown.json()
+        verification = failing.post('/api/v1/auth/email-verification/request', headers=HEADERS)
+        assert verification.status_code == 202
 
 
 # --- Changing a password while signed in ----------------------------------------------
@@ -529,10 +614,18 @@ def test_deletion_removes_every_row_the_workspace_owned(sink_client, sink, sink_
                                headers={**HEADERS, 'Idempotency-Key': 'delete-1'})
     assert created.status_code == 202, created.text
     ask(sink_client)
+    # This creates a user-id keyed window, which deletion must not leave behind.
+    assert sink_client.post('/api/v1/auth/email-verification/request',
+                            headers=HEADERS).status_code == 202
     with sink_app.state.database.session() as db:
+        # Simulate an unexpired account bucket left by the release before keyed HMACs.
+        db.add(RateBucket(key=f'login-account:{token_hash("owner@example.com")}:legacy',
+                          count=1, expires_at='2999-01-01T00:00:00+00:00'))
+        db.commit()
         assert db.query(Record).filter_by(workspace_id=owner['workspace_id']).count() > 0
         assert db.query(Audit).filter_by(workspace_id=owner['workspace_id']).count() > 0
         assert db.query(RecoveryToken).filter_by(user_id=owner['id']).count() > 0
+        assert db.query(RateBucket).filter(RateBucket.key.contains(owner['id'])).count() > 0
     assert delete_account(sink_client).status_code == 200
     with sink_app.state.database.session() as db:
         assert db.query(User).filter_by(id=owner['id']).count() == 0
@@ -541,6 +634,9 @@ def test_deletion_removes_every_row_the_workspace_owned(sink_client, sink, sink_
         assert db.query(Audit).filter_by(workspace_id=owner['workspace_id']).count() == 0
         assert db.query(Session).filter_by(user_id=owner['id']).count() == 0
         assert db.query(RecoveryToken).filter_by(user_id=owner['id']).count() == 0
+        assert db.query(RateBucket).filter(RateBucket.key.contains(owner['id'])).count() == 0
+        assert db.query(RateBucket).filter(
+            RateBucket.key.contains(token_hash('owner@example.com'))).count() == 0
     # The session it was holding is gone, not merely uncookied.
     assert sink_client.get('/api/v1/auth/me').status_code == 401
 

@@ -17,7 +17,8 @@ claims about what this release already supports.
 
 Operational and policy documents: [runbook](docs/RUNBOOK.md) for schema, release, rollback and
 recovery; [permissions, privacy and retention](docs/PRIVACY_AND_PERMISSIONS.md) for what the
-pilot enforces and stores, and what it does not.
+pilot enforces and stores, and what it does not; [production readiness](docs/PRODUCTION_READINESS.md)
+for the current deployment decision and unresolved owner actions.
 
 ---
 
@@ -60,8 +61,11 @@ Consequences that are enforced, not aspirational:
 | Market Gaps | Corridor view that reports insufficient evidence rather than an untapped opportunity |
 
 Not implemented, and not implied anywhere in the interface: live collectors, scheduled
-monitoring, alerts or email of any kind, account recovery, workspace deletion, team invitations,
-billing, and image, video or keyword capture. See
+monitoring, alert delivery, production email delivery, team invitations, billing, evidence-file
+attachments, and image, video or keyword capture. Password reset/change, session management,
+email-verification tokens and one-person-workspace deletion are implemented with browser screens;
+without a production mail provider, reset needs the documented operator path and address
+verification must wait for real delivery. See
 [permissions, privacy and retention](docs/PRIVACY_AND_PERMISSIONS.md).
 
 Image, video and keyword capture, live collectors, alerts and Creative DNA are later phases.

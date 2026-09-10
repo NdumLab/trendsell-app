@@ -1,6 +1,7 @@
 # Handoff — corrections to the 8 September independent review
 
-Branch: `impl/evidence-platform-phase0`. Head: `f81c424`.
+Branch: `impl/evidence-platform-phase0`. Original handoff head: `f81c424`.
+Production-readiness baseline before the 10 September follow-up: `ec93a25`.
 Reviewed commit: `83a4a0d`. Review: [CLAUDE_IMPLEMENTATION_REVIEW_2026-09-08.md](CLAUDE_IMPLEMENTATION_REVIEW_2026-09-08.md).
 Written: 9 September 2026.
 
@@ -16,6 +17,14 @@ Written: 9 September 2026.
 
 **Deployment remains pending an independent review; nothing here has been deployed, and
 Gate A is marked `In review`, not `Done`. No re-review has signed off.**
+
+> **Follow-up, 10 September.** A production-readiness review found and corrected local
+> logging, recovery and documentation gaps: production templates suppress raw Uvicorn
+> access lines and use a reduced nginx access format; network rate keys are hashed;
+> diagnostic mail cannot claim delivery and is rejected in production; an operator-issued
+> reset takes the account lock and does not verify the email address; live deletion is
+> distinguished from backup retention. The current deployment decision and current test
+> evidence live in [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).
 
 The review was right to decline sign-off. Two of Gate A's own acceptance criteria were
 failing — an evidence-bearing draft disagreed with its own saved assessment, and the
@@ -169,10 +178,10 @@ provider decision: verified email ownership is now implemented and exercised end
 against the sink (24-hour, single-use, purpose-bound tokens; purposes are not
 interchangeable; existing accounts are deliberately not grandfathered as verified), and
 account/workspace deletion is implemented behind the password and a typed phrase. Both
-arrived untested — 12 and 8 tests were added for them here, and the deletion tests were
+arrived untested — 12 and 8 tests were added for them at that intermediate point, and the deletion tests were
 strengthened after mutation testing showed two of them passing vacuously. Deletion now
-refuses a workspace with other members rather than orphaning their rows. Neither feature
-has any browser UI; both are API-only.
+refused a workspace with other members rather than orphaning their rows. They were API-only
+then; the later end-to-end work documented below added both browser flows.
 
 ## End-to-end review, 9 September
 
@@ -247,18 +256,12 @@ Nothing in this list is a regression introduced here; each is scope not yet buil
    owner can approve their own compliance review. This permission model does not establish
    qualified independent review — a reviewer role exists, but nothing supplies a qualified
    reviewer.
-5. **Recovery cannot deliver** (P03). With no transport the endpoint mints no token and
-   sends nothing; a locked-out user still needs an operator, and that procedure is not
-   written. *Updated 9 September: verified email ownership is now implemented and tested
-   against the sink; only delivery is blocked, and it needs a transport class, not just a
-   setting.*
-6. ~~**Account and workspace deletion** is not implemented.~~ *Implemented 9 September,
-   API-only. A shared workspace is refused rather than partially deleted.*
-6a. ~~**No browser UI for account security.**~~ *Built 9 September: password reset from the
-   sign-in dialog, password change, session listing and revocation, email verification and
-   workspace deletion all have screens, each covered by a browser test that reads its token
-   out of the message the sink wrote. What remains is delivery, and the operator procedure
-   for a locked-out user — now written up in the runbook.*
+5. **Recovery cannot self-deliver** (P03). With no production transport the endpoint mints
+   no token and sends nothing. A locked-out user needs the lock-preserving operator procedure
+   in the runbook. A provider still requires a transport implementation and release.
+6. **Deletion removes the live one-person workspace.** The browser flow is implemented and
+   refuses a shared workspace rather than partially deleting it. Historical backups retain
+   older copies until their as-yet-unset retention period ends.
 7. **No production restore drill, no scheduled backups, no agreed RPO/RTO** (P06). The
    drill above is disposable PostgreSQL only.
 8. **No alerting reaches an on-call destination** (P07). Counters and structured logs

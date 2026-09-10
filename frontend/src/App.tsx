@@ -42,17 +42,21 @@ function PasswordRecovery({onDone}:{onDone:()=>void}){
  const {data:config}=useQuery({queryKey:['config'],queryFn:()=>api<{mail_delivery_configured:boolean}>('/config'),retry:false});
  if(stage==='request')return <form className="stack" onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');
   const data=new FormData(e.currentTarget);
-  try{await post('/auth/recovery/request',{email:data.get('email')});setStage('redeem');
-   toast.success('If that address has a workspace, a reset message has been sent.');}
+  try{const result=await post<{delivery_configured:boolean}>('/auth/recovery/request',{email:data.get('email')});setStage('redeem');
+   toast.success(result.delivery_configured
+    ? 'If that address has a workspace and delivery succeeds, reset instructions will arrive.'
+    : 'Request accepted. No message was sent; ask an operator for a reset token.');}
   catch(e){setError((e as Error).message);}finally{setBusy(false);}}}>
-  <p className="form-caption">Enter your address and we will send a reset link. The answer is the
-   same either way — it never reveals whether an account exists.</p>
+  <p className="form-caption">{config?.mail_delivery_configured
+   ? 'Enter your address and we will try to send a reset link.'
+   : 'Enter your address to start recovery, then ask an operator for the reset token.'} The answer is
+   the same either way — it never reveals whether an account exists.</p>
   {config&&!config.mail_delivery_configured&&<Notice kind="amber">This deployment has no mail
    transport configured, so no message can actually be delivered. Ask an operator to issue a
    reset token, then enter it on the next step.</Notice>}
   <label>Email address<input name="email" type="email" required autoComplete="email" placeholder="you@company.com"/></label>
   {error&&<div role="alert" className="form-error">{error}</div>}
-  <button className="button primary full" disabled={busy}>{busy?'Please wait…':'Send a reset link'}<ArrowRight size={16}/></button>
+  <button className="button primary full" disabled={busy}>{busy?'Please wait…':config?.mail_delivery_configured?'Send a reset link':'Continue to token'}<ArrowRight size={16}/></button>
   <button className="text-button centered" type="button" onClick={onDone}>Back to sign in</button>
  </form>;
  return <form className="stack" onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');

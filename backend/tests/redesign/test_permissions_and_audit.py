@@ -12,11 +12,13 @@ import json
 import logging
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.db import Audit, User
 from app.observability import UNMATCHED_LABEL, JsonFormatter, route_label
 from app.permissions import PERMISSIONS, ROLES, granted
-from app.main import EXPORT_SCHEMA
+from app.main import EXPORT_SCHEMA, create_app
+from app.settings import Settings
 from conftest import HEADERS, OPERATOR, PASSWORD
 
 AMAZON = 'https://www.amazon.com/dp/B0ABCDEFGH'
@@ -404,6 +406,34 @@ def test_request_logs_carry_no_secrets_or_payloads(client, owner, request_logs):
     serialised = json.dumps([record.context for record in lines])
     assert PASSWORD not in serialised
     assert 'owner@example.com' not in serialised
+
+
+def test_exception_text_cannot_enter_any_server_log_or_response(database_url, request_logs):
+    marker = 'private-address@example.test/raw-request?secret=value'
+
+    failure_app = create_app(Settings(environment='test', database_url=database_url,
+                                      origins=('http://localhost:3000',)))
+
+    @failure_app.get('/test-failure')
+    def fail_for_test():
+        raise RuntimeError(marker)
+
+    with TestClient(failure_app) as failing:
+        response = failing.get('/test-failure',
+                               headers={'Origin': 'http://localhost:3000'})
+
+    assert response.status_code == 500
+    assert response.json() == {'detail': 'Internal server error.'}
+    assert marker not in response.text
+    assert response.headers['X-Request-ID']
+    assert response.headers['Access-Control-Allow-Origin'] == 'http://localhost:3000'
+    failures = [record for record in request_logs.records
+                if record.getMessage() == 'request failed']
+    assert failures
+    payload = JsonFormatter().format(failures[-1])
+    assert marker not in payload
+    assert json.loads(payload)['error_type'] == 'RuntimeError'
+    assert json.loads(payload)['status'] == 500
 
 
 def test_the_log_line_correlates_with_the_audit_row_it_produced(client, owner, request_logs):

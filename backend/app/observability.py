@@ -7,8 +7,8 @@ request produced. That is the thread from "a user reported an error at 14:02" to
 row that was written.
 
 Logs are JSON, one object per line, and carry no credentials, no request bodies and no
-record payloads: a path, a status, a duration, the request id and — when the request was
-authenticated — the workspace and user ids.
+record payloads: a bounded route template, a status, a duration, the request id and — when
+the request was authenticated — the workspace and user ids.
 """
 import json
 import logging
@@ -40,7 +40,10 @@ class JsonFormatter(logging.Formatter):
         for key, value in getattr(record, 'context', {}).items():
             payload[key] = value
         if record.exc_info:
-            payload['error'] = self.formatException(record.exc_info).splitlines()[-1]
+            # Exception messages can embed SQL parameters, addresses, filenames or other
+            # user-controlled text. The request id and class are enough to correlate a
+            # failure without turning the application journal into a payload sink.
+            payload['error_type'] = record.exc_info[0].__name__
         return json.dumps(payload, default=str)
 
 

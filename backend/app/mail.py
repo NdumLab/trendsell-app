@@ -13,8 +13,7 @@ Three transports, because "not configured" and "configured wrongly" must not loo
                         unavailable rather than silently dropping a reset a user is
                         waiting for.
 ``LoggingMailer``       records that a message was addressed, with no body and no address,
-                        for a deployment that wants evidence of volume before a provider
-                        exists.
+                        for development diagnostics before a provider exists.
 
 No transport here opens a socket. Adding a real provider means adding one class and one
 settings branch; nothing that calls `send()` changes.
@@ -83,12 +82,12 @@ class SinkMailer(Mailer):
     def send(self, message: Message):
         if not deliverable(message.to):
             raise MailNotConfigured(f'{message.to!r} is not an address this transport can send to.')
-        self.sent.append(message)
         if self.directory:
             self.directory.mkdir(parents=True, exist_ok=True)
-            path = self.directory / f'{len(self.sent):04d}-{message.purpose}.json'
+            path = self.directory / f'{len(self.sent) + 1:04d}-{message.purpose}.json'
             path.write_text(json.dumps({'to': message.to, 'subject': message.subject,
                                         'purpose': message.purpose, 'body': message.body}, indent=2))
+        self.sent.append(message)
         return message
 
     def latest(self, purpose=None):
@@ -99,8 +98,13 @@ class SinkMailer(Mailer):
 
 
 class LoggingMailer(Mailer):
-    """Counts messages without keeping their content, addresses or tokens."""
-    configured = True
+    """Records an attempted mail without pretending that it delivered anything.
+
+    This is useful while observing demand for mail in development, but it is not a
+    delivery transport. Callers must not mint a bearer credential or tell a person to
+    check their inbox merely because this logger was selected.
+    """
+    configured = False
 
     def send(self, message: Message):
         if not deliverable(message.to):

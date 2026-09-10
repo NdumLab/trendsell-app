@@ -1,11 +1,12 @@
 import hashlib
+import hmac
 import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from fastapi import HTTPException
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
-from .db import RateBucket, Session
+from .db import RateBucket, RecoveryToken, Session
 
 #: Windows in this app are hourly or daily; a day plus a margin outlives all of them.
 DEFAULT_BUCKET_TTL = 26 * 3600
@@ -20,6 +21,18 @@ def check_password(password, stored):
 
 def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def keyed_hash(value, secret):
+    """A stable, non-enumerable digest for low-entropy rate-limit identifiers.
+
+    Email and network addresses have small enough search spaces that plain SHA-256 is only
+    obfuscation. A deployment-specific HMAC still lets every worker share one database
+    bucket without leaving a value that can be recovered with an offline dictionary.
+    """
+    if not secret:
+        raise ValueError('A rate-key secret is required')
+    return hmac.new(secret.encode(), value.encode(), hashlib.sha256).hexdigest()
 
 def window_end(seconds):
     """When the current bucket stops counting, so cleanup knows what is finished."""
@@ -41,17 +54,21 @@ def consume(db, key, limit, ttl_seconds=DEFAULT_BUCKET_TTL, message=None):
 
 
 def purge_expired(db, now=None):
-    """Remove finished rate windows and dead sessions (action plan P04).
+    """Remove finished rate windows, dead sessions and expired recovery credentials.
 
     Only rows whose own expiry has passed are removed, so an active window keeps counting
-    and a live session keeps working. Returns what was removed, for the operational log.
+    and a live session or recovery credential keeps working. Used recovery credentials stay
+    until their original expiry so a replay can still be distinguished during that window.
+    Returns what was removed, for the operational log.
     """
     moment = now or datetime.now(timezone.utc).isoformat()
     sessions = db.query(Session).filter(Session.expires_at <= moment).delete(synchronize_session=False)
+    recovery_tokens = db.query(RecoveryToken).filter(
+        RecoveryToken.expires_at <= moment).delete(synchronize_session=False)
     buckets = db.query(RateBucket).filter(RateBucket.expires_at.isnot(None),
                                           RateBucket.expires_at <= moment).delete(synchronize_session=False)
     db.commit()
-    return {'sessions': sessions, 'rate_buckets': buckets}
+    return {'sessions': sessions, 'recovery_tokens': recovery_tokens, 'rate_buckets': buckets}
 
 def resolve_input(value):
     """Parse identifiers only. Never fetch a user-controlled URL or follow redirects."""
