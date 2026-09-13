@@ -49,6 +49,10 @@ export interface User { id: string; name: string; email: string; workspace_id: s
   role: 'owner' | 'analyst' | 'reviewer' | 'viewer';
   /** Null until this installation has proved control of the address. */
   email_verified?: boolean; email_verified_at?: string | null }
+export interface WorkspaceInvitation {
+  id: string; email: string; role: 'analyst' | 'reviewer' | 'viewer'; created_at: string;
+  expires_at: string; sent_at: string | null; accepted_at: string | null; revoked_at: string | null;
+}
 export interface JobEvent { id: number; step: string; status: string; detail: string; at: string }
 export interface Job { id: string; product_id: string; status: string; events: JobEvent[] }
 export interface Source { id: string; name: string; category: string; markets: string[]; reason: string; rights: string; status: string; last_success: string | null; last_attempt: string | null; next_retry: string; freshness_hours: number }

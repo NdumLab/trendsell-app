@@ -26,9 +26,9 @@ const RUN_DIR = process.env.TRENDSELL_E2E_RUN_DIR ?? mkdtempSync(join(tmpdir(), 
 process.env.TRENDSELL_E2E_RUN_DIR = RUN_DIR;
 const DATABASE = join(RUN_DIR, 'e2e.db');
 /** The local mail sink, so the browser can exercise the flows that carry a token —
- *  password reset and email verification — exactly as a person would: by reading the
- *  token out of the message that was sent, not out of the database. No provider ships
- *  with the application, and `sink` must never be set in production. */
+ *  password reset, email verification and invitations — exactly as a person would: by
+ *  reading the token out of the message that was sent, not out of the database. The sink
+ *  is test-only and must never be set in production. */
 const MAIL_DIR = join(RUN_DIR, 'mail');
 process.env.TRENDSELL_E2E_MAIL_DIR = MAIL_DIR;
 // The repository venv when it exists, so a local run needs no extra setup; plain `python` in CI.

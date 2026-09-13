@@ -1,4 +1,4 @@
-import { asin, captureAndConfirm, enterDemo, expect, fillDecisionInputs, test } from './fixtures';
+import { asin, captureAndConfirm, enterDemo, expect, fillDecisionInputs, inviteReviewer, test } from './fixtures';
 
 /** Recording evidence and requesting an import-readiness review (E06, N02, N03, D03).
  *
@@ -56,8 +56,9 @@ test.describe('evidence and import readiness', () => {
     await expect(form).toBeHidden();
 
     await expect(page.getByText('Waiting for a reviewer')).toBeVisible();
-    // The owner of this workspace does hold compliance.review, so the action is offered;
-    // what must never happen is the gate resolving from the Decision Room dropdown.
+    await expect(page.getByRole('button', { name: 'Decide this review' })).toHaveCount(0);
+    await expect(page.getByText(/waiting for a different workspace reviewer/i)).toBeVisible();
+    // The gate also cannot be cleared from the Decision Room dropdown.
     await page.goto(`/decisions?product=${new URL(page.url()).searchParams.get('product') ?? ''}`);
     await page.goto('/decisions');
     await expect(page.getByLabel('Import status')).toHaveValue('unresolved');
@@ -67,13 +68,12 @@ test.describe('evidence and import readiness', () => {
     expect(workspace.workspace).toBe('E2E workspace');
   });
 
-  test('a reviewer decision resolves the gate and the assessment records it', async ({ page, workspace }) => {
+  test('a reviewer decision resolves the gate and the assessment records it', async ({ page, browser, workspace }) => {
     const name = 'Reviewed candidate';
     await captureAndConfirm(page, asin(53), name);
-    const productUrl = page.url();
-
     await page.goto('/discover');
     await page.getByRole('link', { name: new RegExp(name) }).click();
+    const productUrl = page.url();
     const productId = page.url().split('/').pop()!;
     await page.getByRole('button', { name: 'Local viability' }).click();
 
@@ -85,8 +85,11 @@ test.describe('evidence and import readiness', () => {
     await request.getByRole('button', { name: 'Send to a reviewer' }).click();
     await expect(request).toBeHidden();
 
-    await page.getByRole('button', { name: 'Decide this review' }).click();
-    const decision = page.getByRole('dialog');
+    const reviewer = await inviteReviewer(page, browser);
+    await reviewer.page.goto(productUrl);
+    await reviewer.page.getByRole('button', { name: 'Local viability' }).click();
+    await reviewer.page.getByRole('button', { name: 'Decide this review' }).click();
+    const decision = reviewer.page.getByRole('dialog');
     await expect(decision.getByText('Retail sale to consumers in Lagos')).toBeVisible();
     await decision.getByLabel('Rationale').fill('Classified as a domestic steam appliance under the cited guideline.');
     await decision.getByLabel('Confirmed HS code').fill('8451.30.00');
@@ -97,7 +100,10 @@ test.describe('evidence and import readiness', () => {
     await decision.getByLabel('Effective from').fill('2026-01-01');
     await decision.getByRole('button', { name: 'Record this decision' }).click();
     await expect(decision).toBeHidden();
+    await reviewer.context.close();
 
+    await page.reload();
+    await page.getByRole('button', { name: 'Local viability' }).click();
     await expect(page.getByText('Approved', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('8451.30.00')).toBeVisible();
     await expect(page.getByText('Product certificate before shipment')).toBeVisible();
@@ -107,7 +113,7 @@ test.describe('evidence and import readiness', () => {
     await fillDecisionInputs(page);
     await page.getByRole('button', { name: 'Save this decision' }).click();
     await expect(page.getByText(/That assessment is immutable/)).toBeVisible();
-    expect(productUrl).toContain('/xray');
+    expect(productUrl).toContain('/products/');
     expect(workspace.workspace).toBe('E2E workspace');
   });
 

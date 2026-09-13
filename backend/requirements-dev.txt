@@ -1,5 +1,7 @@
 # Development and test dependencies. Installs the runtime set as well.
 -r requirements.txt
-httpx==0.28.1
+# Starlette 1.6's TestClient targets the maintained HTTPX2 package. Keep the preferred
+# client explicit instead of relying on Starlette's deprecated legacy-httpx fallback.
+httpx2==2.12.0
 pytest==9.0.3
 pytest-xdist==3.8.0

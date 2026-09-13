@@ -61,11 +61,11 @@ Consequences that are enforced, not aspirational:
 | Market Gaps | Corridor view that reports insufficient evidence rather than an untapped opportunity |
 
 Not implemented, and not implied anywhere in the interface: live collectors, scheduled
-monitoring, alert delivery, production email delivery, team invitations, billing, evidence-file
-attachments, and image, video or keyword capture. Password reset/change, session management,
-email-verification tokens and one-person-workspace deletion are implemented with browser screens;
-without a production mail provider, reset needs the documented operator path and address
-verification must wait for real delivery. See
+monitoring, alert delivery, billing, evidence-file attachments, and image, video or keyword
+capture. Password reset/change, session management, email verification, owner-managed team
+invitations and member removal have browser screens. The release includes a TLS-enforced SMTP
+transport, but a deployment still needs an approved provider, sending identity, DNS
+authentication and delivery monitoring before those messages can reach real inboxes. See
 [permissions, privacy and retention](docs/PRIVACY_AND_PERMISSIONS.md).
 
 Image, video and keyword capture, live collectors, alerts and Creative DNA are later phases.
@@ -122,8 +122,8 @@ cd frontend && npm run typecheck && npm run build
 one side fails on the other. `contracts/identifier_cases.json` does the same for the inputs X-Ray
 accepts — including the URLs it must refuse, since TrendSell never fetches a user-supplied address.
 
-CI runs backend tests, frontend type-check/tests/build, a clean-clone build, a secret scan and a
-dependency scan on every pull request.
+CI runs backend tests, frontend type-check/tests/build, reproducible clean-clone release builds,
+dependency vulnerability/license policy checks, and redacting secret scans on every pull request.
 
 ## Demo workspace
 

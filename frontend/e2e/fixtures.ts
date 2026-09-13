@@ -1,4 +1,4 @@
-import { expect, test as base, type Page } from '@playwright/test';
+import { expect, test as base, type Browser, type BrowserContext, type Page } from '@playwright/test';
 
 /** Shared browser fixtures (action plan T02).
  *
@@ -133,7 +133,9 @@ export function mailDir() {
 }
 
 /** The newest message of one purpose, waiting briefly for it to be written. */
-export async function latestMessage(purpose: 'password_reset' | 'email_verification') {
+type MailPurpose = 'password_reset' | 'email_verification' | 'workspace_invitation';
+
+export async function latestMessage(purpose: MailPurpose) {
   const { readdirSync, readFileSync } = await import('node:fs');
   const { join } = await import('node:path');
   for (let attempt = 0; attempt < 40; attempt++) {
@@ -150,10 +152,33 @@ export async function latestMessage(purpose: 'password_reset' | 'email_verificat
 }
 
 /** The token a message carries, as the person reading it would copy it out. */
-export async function tokenFrom(purpose: 'password_reset' | 'email_verification') {
+export async function tokenFrom(purpose: MailPurpose) {
   const message = await latestMessage(purpose);
-  const label = purpose === 'password_reset' ? 'Reset token:' : 'Verification token:';
+  const label = purpose === 'password_reset' ? 'Reset token:'
+    : purpose === 'email_verification' ? 'Verification token:' : 'Invitation token:';
   const line = message.body.split('\n').find(text => text.startsWith(label));
   if (!line) throw new Error(`no ${label} line in the ${purpose} message`);
   return line.slice(label.length).trim();
+}
+
+/** Invite and sign in a real second reviewer through the shipped membership flow. */
+export async function inviteReviewer(owner: Page, browser: Browser): Promise<{
+  context: BrowserContext; page: Page; email: string;
+}> {
+  const email = uniqueEmail();
+  const invited = await owner.request.post('/api/v1/workspace/invitations', {
+    headers: { 'X-Requested-With': 'TrendSell' },
+    data: { email, role: 'reviewer' },
+  });
+  expect(invited.status(), await invited.text()).toBe(201);
+  const token = await tokenFrom('workspace_invitation');
+  const probe = await owner.request.get('/api/v1/config');
+  const context = await browser.newContext({ baseURL: new URL(probe.url()).origin });
+  const reviewer = await context.newPage();
+  const accepted = await reviewer.request.post('/api/v1/auth/invitations/accept', {
+    headers: { 'X-Requested-With': 'TrendSell' },
+    data: { token, name: 'Independent reviewer', password: PASSWORD },
+  });
+  expect(accepted.status(), await accepted.text()).toBe(201);
+  return { context, page: reviewer, email };
 }

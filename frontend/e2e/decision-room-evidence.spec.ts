@@ -1,4 +1,4 @@
-import { apiProduct, asin, downloadJson, expect, fillDecisionInputs, recordFullCoverage, test } from './fixtures';
+import { apiProduct, asin, downloadJson, expect, fillDecisionInputs, inviteReviewer, recordFullCoverage, test } from './fixtures';
 
 /** Decision Room reads the server's evidence, not a stale list payload (review finding R01).
  *
@@ -102,7 +102,7 @@ test.describe('decision room reads recorded evidence', () => {
     expect(workspace.workspace).toBe('E2E workspace');
   });
 
-  test('a reviewer rejection decides the draft without the user restating it', async ({ page, workspace }) => {
+  test('a reviewer rejection decides the draft without the user restating it', async ({ page, browser, workspace }) => {
     const productId = await apiProduct(page, asin(64), 'Rejected candidate');
     await recordFullCoverage(page, productId);
     const headers = { 'X-Requested-With': 'TrendSell' };
@@ -114,10 +114,12 @@ test.describe('decision room reads recorded evidence', () => {
               question: 'Which classification applies and is import permitted?' },
     });
     expect(requested.status(), await requested.text()).toBe(201);
-    const decided = await page.request.post(
+    const reviewer = await inviteReviewer(page, browser);
+    const decided = await reviewer.page.request.post(
       `/api/v1/compliance/reviews/${(await requested.json()).id}/decision`,
       { headers, data: { status: 'rejected', rationale: 'Not permitted for import as specified.' } });
     expect(decided.status(), await decided.text()).toBe(200);
+    await reviewer.context.close();
 
     await page.goto(`/decisions?product=${productId}`);
     await fillDecisionInputs(page);
@@ -138,7 +140,7 @@ test.describe('decision room reads recorded evidence', () => {
     expect(workspace.workspace).toBe('E2E workspace');
   });
 
-  test('an approved review resolves the gate the draft reports', async ({ page, workspace }) => {
+  test('an approved review resolves the gate the draft reports', async ({ page, browser, workspace }) => {
     const productId = await apiProduct(page, asin(65), 'Approved candidate');
     await recordFullCoverage(page, productId);
     const headers = { 'X-Requested-With': 'TrendSell' };
@@ -149,7 +151,8 @@ test.describe('decision room reads recorded evidence', () => {
               intended_use: 'Retail sale to consumers in Lagos',
               question: 'Which classification applies before import?' },
     });
-    const decided = await page.request.post(
+    const reviewer = await inviteReviewer(page, browser);
+    const decided = await reviewer.page.request.post(
       `/api/v1/compliance/reviews/${(await requested.json()).id}/decision`,
       { headers, data: { status: 'approved', hs_code: '8451.30.00',
                          rationale: 'Classified as a domestic steam appliance under the cited guideline.',
@@ -158,6 +161,7 @@ test.describe('decision room reads recorded evidence', () => {
                                      url: 'https://example-regulator.test/guidelines/84',
                                      publisher: 'Example regulator', effective_from: '2026-01-01' }] } });
     expect(decided.status(), await decided.text()).toBe(200);
+    await reviewer.context.close();
 
     await page.goto(`/decisions?product=${productId}`);
     await fillDecisionInputs(page);

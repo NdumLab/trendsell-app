@@ -422,7 +422,7 @@ def requested(client, confirmed):
 
 def test_an_approval_on_expired_support_cannot_clear_the_gate(client, confirmed, requested, reviewer):
     """The review's exact reproduction: 2010-2011 support, no code, no requirements."""
-    response = approve(client, requested, sources=[EXPIRED_SOURCE], hs_code='', requirements=[])
+    response = approve(reviewer, requested, sources=[EXPIRED_SOURCE], hs_code='', requirements=[])
     assert response.status_code == 422, response.text
 
     gate = client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']
@@ -430,44 +430,44 @@ def test_an_approval_on_expired_support_cannot_clear_the_gate(client, confirmed,
 
 
 def test_an_approval_citing_only_expired_sources_is_refused(client, confirmed, requested, reviewer):
-    response = approve(client, requested, sources=[EXPIRED_SOURCE])
+    response = approve(reviewer, requested, sources=[EXPIRED_SOURCE])
     assert response.status_code == 422
     assert 'expired or not yet in force' in response.json()['detail']
 
 
 def test_an_approval_citing_a_future_source_is_refused(client, confirmed, requested, reviewer):
     future = {**EXPIRED_SOURCE, 'effective_from': '2099-01-01', 'effective_to': None}
-    response = approve(client, requested, sources=[future])
+    response = approve(reviewer, requested, sources=[future])
     assert response.status_code == 422
     assert 'expired or not yet in force' in response.json()['detail']
 
 
 def test_an_approval_must_name_the_classification_it_reviewed(client, requested, reviewer):
-    assert approve(client, requested, hs_code='').status_code == 422
+    assert approve(reviewer, requested, hs_code='').status_code == 422
 
 
 @pytest.mark.parametrize('code', ['.', '....', '12.34', '8451.', '8451..30', '8451.3'])
 def test_an_approval_requires_a_structured_classification(client, requested, reviewer, code):
-    assert approve(client, requested, hs_code=code).status_code == 422
+    assert approve(reviewer, requested, hs_code=code).status_code == 422
 
 
 def test_an_approval_with_no_requirements_must_say_so_deliberately(client, requested, reviewer):
     """An empty list is silence; a reviewer has to state that none apply."""
-    assert approve(client, requested, requirements=[]).status_code == 422
-    assert approve(client, requested, requirements=[], no_additional_requirements=True).status_code == 200
+    assert approve(reviewer, requested, requirements=[]).status_code == 422
+    assert approve(reviewer, requested, requirements=[], no_additional_requirements=True).status_code == 200
 
 
 def test_a_source_period_must_be_real_and_ordered(client, requested, reviewer):
     impossible = {**EXPIRED_SOURCE, 'effective_from': '2026-13-45', 'effective_to': None}
-    assert approve(client, requested, sources=[impossible]).status_code == 422
+    assert approve(reviewer, requested, sources=[impossible]).status_code == 422
     backwards = {**EXPIRED_SOURCE, 'effective_from': '2026-06-01', 'effective_to': '2026-01-01'}
-    assert approve(client, requested, sources=[backwards]).status_code == 422
+    assert approve(reviewer, requested, sources=[backwards]).status_code == 422
 
 
 def test_an_approval_never_outlives_the_support_it_cites(client, confirmed, requested, reviewer):
     """A source lapsing in 30 days ends the approval then, not in 180 days."""
     ends = (datetime.now(timezone.utc) + timedelta(days=30)).strftime('%Y-%m-%d')
-    body = approve(client, requested, validity_days=DEFAULT_VALIDITY_DAYS,
+    body = approve(reviewer, requested, validity_days=DEFAULT_VALIDITY_DAYS,
                    sources=[{**APPROVAL['sources'][0], 'effective_to': ends}]).json()
     assert body['expires_at'][:10] == ends
 
@@ -477,7 +477,7 @@ def test_an_approval_never_outlives_the_support_it_cites(client, confirmed, requ
 
 def test_a_stored_approval_stops_resolving_once_its_support_lapses(client, confirmed, requested, reviewer):
     """Applied on read too, so an approval stored before this rule cannot outlive it."""
-    approve(client, requested)
+    approve(reviewer, requested)
     assert client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']['resolved'] is True
 
     with client.app.state.database.session() as db:
@@ -500,7 +500,7 @@ def test_asking_again_does_not_erase_a_reviewer_s_rejection(client, confirmed, r
     simply by requesting another review — no reviewer involved. A question is not an
     answer: the last decision stands until a reviewer gives a new one.
     """
-    client.post(f'/api/v1/compliance/reviews/{requested}/decision',
+    reviewer.post(f'/api/v1/compliance/reviews/{requested}/decision',
                 json={'status': 'rejected', 'rationale': 'Prohibited for import in this market.'},
                 headers=HEADERS)
     assert client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']['status'] == 'rejected'
@@ -525,7 +525,7 @@ def test_asking_again_does_not_erase_a_reviewer_s_rejection(client, confirmed, r
 def test_asking_again_does_not_leave_an_approval_resolving(client, confirmed, requested, reviewer):
     """The mirror case, deliberately asymmetric: asking again can hold or worsen the gate,
     never improve it. A replaced approval says so rather than claiming it expired."""
-    approve(client, requested)
+    approve(reviewer, requested)
     assert client.get(f'/api/v1/products/{confirmed}/compliance').json()['gate']['resolved'] is True
 
     client.post(f'/api/v1/products/{confirmed}/compliance/requests',
@@ -552,7 +552,7 @@ def test_one_review_accepts_exactly_one_decision_under_postgres(client, app, req
     from fastapi.testclient import TestClient
     from app.db import Audit
 
-    cookies = dict(client.cookies)
+    cookies = dict(reviewer.cookies)
     barrier = Barrier(2, timeout=20)
 
     def decide(body):
@@ -575,7 +575,7 @@ def test_one_review_accepts_exactly_one_decision_under_postgres(client, app, req
 
 
 def test_a_legacy_incomplete_approval_cannot_clear_the_current_gate(client, confirmed, requested, reviewer):
-    approve(client, requested)
+    approve(reviewer, requested)
     with client.app.state.database.session() as db:
         row = db.query(Record).filter_by(kind='compliance_review', id=requested).one()
         payload = dict(row.payload)
@@ -595,7 +595,7 @@ def test_a_legacy_incomplete_approval_cannot_clear_the_current_gate(client, conf
 
 def test_a_rejected_review_forces_no_go_without_the_user_restating_it(client, confirmed, requested, reviewer):
     rich_evidence(client, confirmed)
-    rejected = client.post(f'/api/v1/compliance/reviews/{requested}/decision',
+    rejected = reviewer.post(f'/api/v1/compliance/reviews/{requested}/decision',
                            json={'status': 'rejected',
                                  'rationale': 'Prohibited for import into the destination market.'},
                            headers=HEADERS)
@@ -616,7 +616,7 @@ def test_a_rejected_review_forces_no_go_without_the_user_restating_it(client, co
 def test_the_saved_assessment_and_its_gate_never_disagree(client, confirmed, requested, reviewer):
     """The disagreement the review reproduced: gate says stop, decision says WATCH."""
     rich_evidence(client, confirmed)
-    client.post(f'/api/v1/compliance/reviews/{requested}/decision',
+    reviewer.post(f'/api/v1/compliance/reviews/{requested}/decision',
                 json={'status': 'rejected', 'rationale': 'Not permitted for import as specified.'},
                 headers=HEADERS)
     body = client.post('/api/v1/decisions', json={'product_id': confirmed, 'inputs': INPUTS},
@@ -626,7 +626,7 @@ def test_the_saved_assessment_and_its_gate_never_disagree(client, confirmed, req
 
 def test_more_information_is_not_a_rejection(client, confirmed, requested, reviewer):
     rich_evidence(client, confirmed)
-    client.post(f'/api/v1/compliance/reviews/{requested}/decision',
+    reviewer.post(f'/api/v1/compliance/reviews/{requested}/decision',
                 json={'status': 'more_information', 'rationale': 'Send the full specification sheet.'},
                 headers=HEADERS)
     body = client.post('/api/v1/decisions', json={'product_id': confirmed, 'inputs': INPUTS},
@@ -638,7 +638,7 @@ def test_more_information_is_not_a_rejection(client, confirmed, requested, revie
 def test_a_saved_assessment_records_the_thresholds_that_decided_it(client, confirmed, requested, reviewer):
     """So a rejection recorded under these gates replays under these gates (R06)."""
     rich_evidence(client, confirmed)
-    client.post(f'/api/v1/compliance/reviews/{requested}/decision',
+    reviewer.post(f'/api/v1/compliance/reviews/{requested}/decision',
                 json={'status': 'rejected', 'rationale': 'Not permitted for import as specified.'},
                 headers=HEADERS)
     body = client.post('/api/v1/decisions', json={'product_id': confirmed, 'inputs': INPUTS},

@@ -154,6 +154,13 @@
 .settings-card>p{font-size:11px;color:var(--muted);line-height:1.8;margin-bottom:18px}
 .settings-card>.button,.settings-card>.stack{margin-top:auto}
 .settings-card .stack{gap:10px}
+.workspace-members-card{grid-column:1/-1}
+.member-invite-form{display:grid;grid-template-columns:minmax(220px,1fr) 180px auto;gap:12px;align-items:end;margin-bottom:18px}
+.member-invite-form label{margin:0}
+.token-action-page{display:grid;place-items:center;min-height:60vh;padding:28px}
+.token-action-card{width:min(520px,100%);padding:28px}
+.token-action-card>svg{color:var(--lime);margin-bottom:12px}
+.token-action-card>p{color:var(--muted);line-height:1.7;margin:8px 0 20px}
 
 /* Truth and decision states without a colour of their own */
 .truth-unavailable{color:var(--muted-low);border-style:dashed}
@@ -185,6 +192,7 @@
  .hero{padding:26px 22px 24px;min-height:0}
  .hero-radar{display:none}
  .health-summary,.sourcing-steps,.source-grid,.settings-grid{grid-template-columns:minmax(0,1fr)}
+ .member-invite-form{grid-template-columns:minmax(0,1fr)}
  .evidence-policy{flex-direction:column;gap:14px}
  .decision-summary{flex-wrap:wrap;gap:22px}
  .decision-blocker{border-left:0;border-top:1px solid var(--border);padding:18px 0 0;padding-left:0;flex-basis:100%}

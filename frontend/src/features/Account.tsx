@@ -15,9 +15,9 @@ import type { AccountSession } from '@/types';
  *  reach any of it without a client that speaks HTTP. Everything here is the person's
  *  own account, so nothing on this screen depends on a workspace role.
  *
- *  Mail delivery is still unconfigured in production, so the two token flows accept a
- *  pasted token as well as a mailed link. That is deliberate and labelled: it is the
- *  difference between a flow that exists and one that waits on a provider decision.
+ *  A production deployment may configure the SMTP transport after approving its provider
+ *  and sending identity. The token fields remain useful when delivery is off and for a
+ *  person who deliberately copies a credential from a message.
  */
 
 function useSessions(enabled: boolean) {
@@ -30,8 +30,7 @@ function useDelivery() {
     queryFn: () => api<{ mail_delivery_configured: boolean }>('/config') });
 }
 
-/** Prove control of the address. Verification is implemented and testable locally; only
- *  delivering the message waits on the provider. */
+/** Prove control of the address; tests deliver through the local sink. */
 export function EmailVerification() {
   const w = useWorkspace();
   const delivery = useDelivery();
@@ -196,6 +195,8 @@ export function AccountSecurity() {
     <EmailVerification/>
     <ChangePassword/>
     <ActiveSessions/>
-    <DeleteWorkspace/>
+    {w.user.role === 'owner' ? <DeleteWorkspace/>
+      : <Notice>Only the workspace owner can delete this shared workspace. Ask the owner to
+          remove your membership if you no longer need access.</Notice>}
   </>;
 }

@@ -61,7 +61,7 @@ pre-migration database.
    `current_revision: 0001_pilot_baseline`. `up_to_date` is still `False`, which is
    correct: stamping adopts the baseline and deliberately applies nothing after it.
 6. `python -m app.migrate upgrade` — applies `0002` through the current head
-   (`0005_email_verification` at the time of writing).
+   (`0006_workspace_invitations` at the time of writing).
 7. `python -m app.migrate check` — now against the models, expect `up_to_date: True` and
    `matches_models: True`.
 8. `curl -fsS https://<domain>/api/ready` — expect 200 and `"status":"ready"`.
@@ -75,23 +75,26 @@ back a bad schema change means restoring a backup, not downgrading.
 
 ## Turning on account recovery
 
-This is **not** configuration alone. `mail.build()` accepts `sink`, `log` and empty, but
-`sink` and `log` are diagnostics rather than delivery and production settings reject both.
-A real provider needs a transport class and a branch in `build()` — a code change, tests
-and a release — plus the environment setting. Nothing that *calls* `send()` changes, which
-is the point of the seam, but the build does. Before switching it on, two decisions have to
-be made that are not engineering's to make: which provider sends the mail, and whether
-addresses must be verified before recovery will deliver to them.
+The application includes a standards-based SMTP transport. `sink` and `log` remain
+development diagnostics and production settings reject both. Turning on SMTP is still an
+operational release decision: the provider, sending identity, data-processing terms and
+delivery monitoring must be approved before real addresses are sent to it.
 
-1. Choose a provider and a sending identity, and configure SPF/DKIM for it.
-2. Add a transport class to `backend/app/mail.py` — one `send()` that takes a `Message` —
-   and a branch in `build()`. Nothing that calls `send()` changes.
-3. Add the provider's transport name to production settings validation, set
-   `MAIL_TRANSPORT` in `/etc/trendsell/trendsell.env`, and restart.
+1. Choose a provider and sending identity; configure SPF, DKIM and DMARC and verify the
+   provider's TLS and authentication requirements.
+2. Set `MAIL_TRANSPORT=smtp`, `SMTP_HOST`, `SMTP_PORT`, `MAIL_FROM` and, when required,
+   `SMTP_USERNAME`/`SMTP_PASSWORD` in `/etc/trendsell/trendsell.env`. Use STARTTLS (default)
+   or implicit TLS, never both. Production refuses plaintext SMTP.
+3. Set `PUBLIC_APP_URL` to the canonical HTTPS browser origin used by recovery,
+   verification and invitation links, then restart the service.
 4. Verify against a disposable account: request a reset, confirm the message arrives,
    redeem it, and confirm every session for that account ended.
 5. Verify ownership end to end on the same account: register, confirm the verification
    message arrives, redeem it, and confirm `email_verified` becomes true.
+6. Invite a disposable reviewer, accept through the browser link, then revoke that member
+   and confirm its session immediately receives 401.
+7. Send a deliberately undeliverable message and verify the failure reaches the named
+   operator. Check delivery/bounce telemetry before relying on self-service recovery.
 
 `MAIL_TRANSPORT=sink` writes messages to `MAIL_SINK_DIR` instead of sending them. It is
 for development and tests: a reset token is a bearer credential, and the sink can write it
@@ -167,12 +170,18 @@ purpose-bound verification credential to that address, which waits on a real pro
 
 ## Releasing
 
-1. Build and test the artifact: backend suite (SQLite and PostgreSQL), frontend unit and
-   contract tests, TypeScript, production build, browser suite, dependency and secret
-   scans. See `.github/workflows/ci.yml` for the exact commands.
+1. Freeze one clean commit and let its remote workflow build the release artifact: backend
+   suite (SQLite and PostgreSQL), frontend unit and contract tests, TypeScript, production
+   build, browser suite, dependency/vulnerability and locked-license scans, a redacting
+   tracked/history secret scan and a clean runtime import. The clean-clone job runs
+   `scripts/build_release_artifact.sh` twice, requires
+   byte-identical archives, scans the unpacked result and publishes the archive plus SHA-256.
+   Refuse an artifact whose embedded `RELEASE.json` commit is not the approved release commit.
+   A local candidate can be exercised with `scripts/build_release_artifact.sh`, but local output
+   is not a substitute for the remote workflow attached to that commit.
 2. Confirm pilot users received the current privacy notice and record retention for the
-   journal, nginx logs, audit events and backups. Recovery-credential hashes are already
-   swept after their original expiry.
+   journal, nginx logs, audit events and backups. Set `AUDIT_RETENTION_DAYS` to the stated
+   period; recovery-credential and invitation hashes are swept after their expiry.
 3. Back up the production database and verify the dump restores and replays against a
    separate database.
 4. `python -m app.migrate check` against production. Record the revision you are moving
@@ -206,9 +215,14 @@ readiness, or any evidence of record loss.
 
 ## Backup and restore
 
-`scripts/backup_postgres.sh` takes a compressed custom-format dump and prunes old ones;
+`scripts/backup_postgres.sh` takes a compressed custom-format dump, publishes it atomically
+with a SHA-256 sidecar and prunes old local copies;
 `scripts/restore_postgres.sh` restores one into a **separate** database and refuses to
-write over an existing one. `scripts/verify_restore.py` then checks the restored copy:
+write over an existing one or proceed without a matching checksum. When
+`TRENDSELL_BACKUP_S3_URI` is configured, the backup job copies the dump and checksum to that
+private prefix with `AES256` or `aws:kms` server-side encryption; either upload failing makes
+the job fail while retaining the verified local copy. `scripts/verify_restore.py` then checks
+the restored copy:
 table counts, per-workspace record counts, and that saved assessments still replay to the
 values they were stored with. A failed/interrupted dump stays under a hidden `.partial`
 name and is removed; only a dump that `pg_restore --list` can read is atomically published.
@@ -230,9 +244,11 @@ approved. Once they are, install and validate them:
     systemctl start trendsell-backup.service
     systemctl status trendsell-backup.service trendsell-backup.timer
 
-Confirm the first dump exists, is mode `0600`, passes `pg_restore --list`, and is copied to
-the approved off-host location. Record the observed completion time and test a separate
-restore before treating the schedule as recovery capability.
+Confirm the first dump and checksum exist at mode `0600`, `sha256sum --check` passes,
+`pg_restore --list` passes, and both objects reached the approved private off-host prefix.
+Confirm bucket TLS/encryption enforcement, restricted IAM and lifecycle expiry separately;
+the CLI flag alone does not prove those controls. Record the observed completion time and
+test a separate restore before treating the schedule as recovery capability.
 
 Status of the operational parts (action plan P06):
 
@@ -240,7 +256,7 @@ Status of the operational parts (action plan P06):
 | --- | --- |
 | Backup and restore scripts | Present in `scripts/`. Drill run 2026-09-08 against a disposable PostgreSQL 16.4 instance: two workspaces, 30 records, 6 saved assessments. The restored copy reported the same schema revision, identical per-workspace counts, all 6 assessments replaying to their stored values, and cross-workspace reads still returning 404. The script refused to restore over an existing database and rejected a non-alphanumeric database name. |
 | Restore drill on production data | **Not performed.** Requires production access and a decision by the owner |
-| Scheduled backups, retention, offsite copy | Hardened daily service/timer templates are present but **not installed or enabled**. Their default is 14 local days; the owner still needs to approve the location, retention, RPO and off-host copy. |
+| Scheduled backups, retention, offsite copy | Hardened daily service/timer templates and an encrypted S3 copy path are present but **not installed or enabled**. Their default is 14 local days; the owner still needs to approve the location, bucket/IAM/lifecycle policy, retention and RPO. |
 | Recovery point and recovery time objectives | **Not agreed.** Record them here once decided |
 
 Do not treat retained customer research as recoverable until the drill has been run against
@@ -251,20 +267,21 @@ a copy of production and the result recorded in this file.
 These are known and tracked, not oversights:
 
 * No scheduled collection runs, so no backup covers collector state — there is none yet.
-* Email delivery is unconfigured (`MAIL_TRANSPORT=`). Password reset/change, session
-  management and email-verification tokens have browser screens and are tested against a
-  local sink. With no production transport the recovery endpoint mints no token and sends
-  nothing; `delivery_configured: false` says no mail is coming. **A locked-out user therefore
-  has no self-service path and needs an operator**, using the procedure above. Existing
-  accounts are deliberately left unverified rather than grandfathered (action plan P03).
+* The SMTP transport ships, but delivery remains unconfigured (`MAIL_TRANSPORT=`) until a
+  provider and sending identity are approved. With no transport the recovery endpoint mints
+  no token and sends nothing; `delivery_configured: false` says no mail is coming. **A
+  locked-out user therefore has no self-service path and needs an operator**, using the
+  procedure above. Existing accounts remain unverified rather than grandfathered (P03).
 * Metrics are behind `METRICS_TOKEN` and are per worker, so a value is a floor rather
   than a fleet total. Owning a workspace does not grant access (review finding R07).
 * No alerting is wired to an on-call destination (action plan P07). Counters are exposed at
   `GET /api/v1/ops/metrics` only to the separate operator token, and every request is logged
   as JSON with an id; nothing yet forwards either to a paging destination.
-* One-person-workspace deletion is implemented in Settings. It removes live rows; backups
-  retain older copies until they age out, so retention and post-restore deletion handling
-  must be agreed before pilot data is accepted. See
+* Owner-managed membership is implemented, but reviewer qualifications and independence are
+  operational facts the software cannot establish. Workspace deletion requires active members
+  to be removed first and then removes all live identities and rows; backups retain older
+  copies until they age out, so retention and post-restore deletion handling must be agreed.
+  See
   [permissions, privacy and retention](PRIVACY_AND_PERMISSIONS.md).
 
 ## Diagnosing a failure

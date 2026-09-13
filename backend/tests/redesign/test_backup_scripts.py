@@ -54,6 +54,11 @@ def test_backup_atomically_publishes_a_verified_private_dump(tmp_path):
     assert len(backups) == 1
     assert backups[0].read_text() == 'partial dump'
     assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
+    checksum = backups[0].with_suffix('.dump.sha256')
+    assert checksum.exists()
+    assert checksum.read_text().split()[1] == backups[0].name
+    assert str(tmp_path) not in checksum.read_text()
+    assert stat.S_IMODE(checksum.stat().st_mode) == 0o600
     assert list((tmp_path / 'backups').glob('*.partial')) == []
 
 
@@ -75,6 +80,57 @@ def test_backup_retention_must_be_a_bounded_whole_number(tmp_path):
         assert result.returncode == 2, invalid
 
 
+def test_configured_offsite_copy_uploads_dump_and_checksum(tmp_path):
+    tools = backup_tools(tmp_path)
+    calls = tmp_path / 'aws.log'
+    executable(tools / 'aws', r'''
+printf '%s\n' "$*" >> "$AWS_LOG"
+''')
+    environment = backup_environment(tmp_path, tools)
+    environment.update({
+        'AWS_LOG': str(calls),
+        'TRENDSELL_BACKUP_S3_URI': 's3://private-backups/trendsell',
+        'TRENDSELL_BACKUP_S3_SSE': 'AES256',
+    })
+    result = subprocess.run([BACKUP], env=environment, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    uploads = calls.read_text().splitlines()
+    assert len(uploads) == 2
+    assert all('s3://private-backups/trendsell/' in call for call in uploads)
+    assert any('.dump --only-show-errors --sse AES256' in call for call in uploads)
+    assert any('.dump.sha256 --only-show-errors --sse AES256' in call for call in uploads)
+
+
+def test_an_offsite_failure_fails_the_backup_job_but_keeps_local_recovery(tmp_path):
+    tools = backup_tools(tmp_path)
+    executable(tools / 'aws', 'exit 9\n')
+    environment = backup_environment(tmp_path, tools)
+    environment['TRENDSELL_BACKUP_S3_URI'] = 's3://private-backups/trendsell'
+    result = subprocess.run([BACKUP], env=environment, text=True, capture_output=True)
+    assert result.returncode == 9
+    assert len(list((tmp_path / 'backups').glob('trendsell-*.dump'))) == 1
+
+
+def test_offsite_failure_does_not_prevent_local_retention(tmp_path):
+    tools = backup_tools(tmp_path)
+    executable(tools / 'aws', 'exit 9\n')
+    environment = backup_environment(tmp_path, tools)
+    environment['TRENDSELL_BACKUP_S3_URI'] = 's3://private-backups/trendsell'
+    backup_dir = Path(environment['TRENDSELL_BACKUP_DIR'])
+    backup_dir.mkdir()
+    old = backup_dir / 'trendsell-20000101T000000Z-old.dump'
+    old.write_text('expired dump')
+    old.with_suffix('.dump.sha256').write_text('expired checksum')
+    old_time = 946684800
+    os.utime(old, (old_time, old_time))
+    os.utime(old.with_suffix('.dump.sha256'), (old_time, old_time))
+
+    result = subprocess.run([BACKUP], env=environment, text=True, capture_output=True)
+    assert result.returncode == 9
+    assert not old.exists() and not old.with_suffix('.dump.sha256').exists()
+    assert len(list(backup_dir.glob('trendsell-*.dump'))) == 1
+
+
 def test_restore_preserves_connection_query_options(tmp_path):
     tools = tmp_path / 'bin'
     tools.mkdir()
@@ -87,6 +143,9 @@ printf 'restore:%s\n' "$*" >> "$COMMAND_LOG"
 ''')
     dump = tmp_path / 'source.dump'
     dump.write_text('dump')
+    checksum = subprocess.run(['sha256sum', dump.name], cwd=tmp_path, text=True,
+                              capture_output=True, check=True).stdout
+    dump.with_suffix('.dump.sha256').write_text(checksum)
     environment = os.environ.copy()
     environment.update({
         'PATH': f'{tools}:{environment["PATH"]}',
@@ -100,3 +159,27 @@ printf 'restore:%s\n' "$*" >> "$COMMAND_LOG"
     commands = log.read_text()
     assert ('restore:--dbname=postgresql://user:password@db.example/'
             'restored_copy?sslmode=require') in commands
+
+
+def test_restore_refuses_a_tampered_dump_before_creating_a_database(tmp_path):
+    tools = tmp_path / 'bin'
+    tools.mkdir()
+    log = tmp_path / 'commands.log'
+    executable(tools / 'psql', 'printf "called\\n" >> "$COMMAND_LOG"\n')
+    executable(tools / 'pg_restore', 'printf "called\\n" >> "$COMMAND_LOG"\n')
+    dump = tmp_path / 'source.dump'
+    dump.write_text('original')
+    checksum = subprocess.run(['sha256sum', dump.name], cwd=tmp_path, text=True,
+                              capture_output=True, check=True).stdout
+    dump.with_suffix('.dump.sha256').write_text(checksum)
+    dump.write_text('tampered')
+    environment = os.environ.copy()
+    environment.update({
+        'PATH': f'{tools}:{environment["PATH"]}', 'COMMAND_LOG': str(log),
+        'TRENDSELL_ADMIN_URL': 'postgresql://user:password@db.example/postgres',
+    })
+    result = subprocess.run([RESTORE, dump, 'restored_copy'], env=environment,
+                            text=True, capture_output=True)
+    assert result.returncode == 1
+    assert 'SHA-256 verification failed' in result.stderr
+    assert not log.exists()

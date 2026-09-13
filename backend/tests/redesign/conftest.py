@@ -23,6 +23,7 @@ from sqlalchemy import create_engine, text
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app import passwords  # noqa: E402
+from app.db import User  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.settings import Settings  # noqa: E402
 
@@ -115,3 +116,22 @@ def second_client(client):
 def stranger(second_client):
     """A signed-in owner of a different workspace in the same database."""
     return register(second_client, email='stranger@example.com', name='Other workspace')
+
+
+@pytest.fixture
+def workspace_reviewer(client, owner):
+    """A separate signed-in reviewer in the owner's workspace.
+
+    Tests that exercise review outcomes must use a different cookie jar from the
+    requester. Moving this already-authenticated test account keeps the fixture focused
+    on review behavior; invitation acceptance has its own API and browser coverage.
+    """
+    with TestClient(client.app) as reviewer_client:
+        account = register(reviewer_client, email='workspace-reviewer@example.com',
+                           name='Temporary reviewer workspace')
+        with client.app.state.database.session() as db:
+            reviewer = db.query(User).filter_by(id=account['id']).one()
+            reviewer.workspace_id = owner['workspace_id']
+            reviewer.role = 'reviewer'
+            db.commit()
+        yield reviewer_client

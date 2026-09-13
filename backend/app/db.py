@@ -30,6 +30,10 @@ class User(Base):
     # Null means this installation has not yet proved control of the address. Existing
     # users are deliberately not grandfathered as verified by the migration.
     email_verified_at = Column(String)
+    #: Membership removal suspends access instead of deleting this row because audit
+    #: events retain the actor id. A later invitation to the same workspace may reactivate
+    #: the account with a new password; every old session is revoked on suspension.
+    disabled_at = Column(String)
 
 class Session(Base):
     __tablename__ = 'sessions'
@@ -92,6 +96,28 @@ class RecoveryToken(Base):
     expires_at = Column(String, nullable=False, index=True)
     created_at = Column(String, nullable=False, default=now)
     used_at = Column(String)
+
+
+class Invitation(Base):
+    """An expiring, single-use invitation into one existing workspace.
+
+    The bearer token is never stored in clear text or returned by list endpoints. The
+    invited address is bound to the credential, so accepting it cannot create an account
+    under a different identity or workspace.
+    """
+    __tablename__ = 'invitations'
+    id = Column(String, primary_key=True, default=uid)
+    workspace_id = Column(String, ForeignKey('workspaces.id'), nullable=False, index=True)
+    email = Column(String, nullable=False)
+    role = Column(String, nullable=False)
+    token_hash = Column(String, unique=True, nullable=False, index=True)
+    invited_by = Column(String, ForeignKey('users.id'), nullable=False)
+    expires_at = Column(String, nullable=False, index=True)
+    created_at = Column(String, nullable=False, default=now)
+    sent_at = Column(String)
+    accepted_at = Column(String)
+    revoked_at = Column(String)
+    __table_args__ = (UniqueConstraint('workspace_id', 'email'),)
 
 class RateBucket(Base):
     """One counter for one key in one window.

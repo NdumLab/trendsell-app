@@ -62,6 +62,7 @@ frontend/build/
 frontend/dist/
 frontend/.next/
 frontend/out/
+/release/
 *.tsbuildinfo
 
 # ===== Testing =====

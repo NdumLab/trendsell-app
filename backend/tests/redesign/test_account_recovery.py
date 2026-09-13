@@ -10,6 +10,7 @@ accounts out, and there was no way for an affected person to get back in.
 """
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
@@ -328,7 +329,82 @@ def test_diagnostic_mail_transports_are_refused_in_production(monkeypatch, trans
     monkeypatch.setenv('CORS_ORIGINS', 'https://app.example.com')
     monkeypatch.setenv('RATE_KEY_SECRET', 'an-independent-production-rate-key-secret')
     monkeypatch.setenv('MAIL_TRANSPORT', transport)
-    with pytest.raises(ValueError, match='No production mail transport'):
+    with pytest.raises(ValueError, match='development diagnostics'):
+        Settings.from_env()
+
+
+def test_smtp_transport_uses_starttls_authentication_and_an_email_message(monkeypatch):
+    client = MagicMock()
+    client.__enter__.return_value = client
+    constructor = MagicMock(return_value=client)
+    monkeypatch.setattr(mail.smtplib, 'SMTP', constructor)
+    transport = mail.SMTPMailer(
+        host='smtp.example.com', port=587, sender='security@example.com',
+        username='mailer', password='secret', starttls=True)
+    message = mail.Message('owner@example.com', 'Reset access', 'Use this token.', 'password_reset')
+
+    assert transport.send(message) is message
+    constructor.assert_called_once_with('smtp.example.com', 587, timeout=15.0)
+    client.starttls.assert_called_once()
+    client.login.assert_called_once_with('mailer', 'secret')
+    sent = client.send_message.call_args.args[0]
+    assert sent['From'] == 'security@example.com'
+    assert sent['To'] == 'owner@example.com'
+    assert sent['Subject'] == 'Reset access'
+    assert 'Use this token.' in sent.get_content()
+
+
+def test_smtp_transport_can_use_implicit_tls_without_starttls(monkeypatch):
+    client = MagicMock()
+    client.__enter__.return_value = client
+    constructor = MagicMock(return_value=client)
+    monkeypatch.setattr(mail.smtplib, 'SMTP_SSL', constructor)
+    transport = mail.SMTPMailer(
+        host='smtp.example.com', port=465, sender='security@example.com',
+        implicit_tls=True, starttls=False)
+    transport.send(mail.Message('owner@example.com', 'Subject', 'Body'))
+    assert constructor.call_args.kwargs['context'] is not None
+    client.starttls.assert_not_called()
+    client.login.assert_not_called()
+
+
+def test_production_accepts_a_complete_tls_smtp_configuration(monkeypatch):
+    monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv('DATABASE_URL', 'postgresql+psycopg://user:password@db.example/app')
+    monkeypatch.setenv('CORS_ORIGINS', 'https://app.example.com')
+    monkeypatch.setenv('RATE_KEY_SECRET', 'an-independent-production-rate-key-secret')
+    monkeypatch.setenv('MAIL_TRANSPORT', 'smtp')
+    monkeypatch.setenv('SMTP_HOST', 'smtp.example.com')
+    monkeypatch.setenv('SMTP_USERNAME', 'mailer')
+    monkeypatch.setenv('SMTP_PASSWORD', 'secret')
+    monkeypatch.setenv('MAIL_FROM', 'security@example.com')
+    settings = Settings.from_env()
+    assert settings.mail_transport == 'smtp'
+    assert mail.build(settings).configured is True
+
+
+@pytest.mark.parametrize('change,match', [
+    ({'SMTP_HOST': ''}, 'SMTP_HOST'),
+    ({'MAIL_FROM': ''}, 'MAIL_FROM'),
+    ({'SMTP_STARTTLS': 'false'}, 'requires SMTP_STARTTLS'),
+    ({'SMTP_SSL': 'true'}, 'cannot both be true'),
+])
+def test_incomplete_or_insecure_production_smtp_is_refused(monkeypatch, change, match):
+    values = {
+        'APP_ENV': 'production',
+        'DATABASE_URL': 'postgresql+psycopg://user:password@db.example/app',
+        'CORS_ORIGINS': 'https://app.example.com',
+        'RATE_KEY_SECRET': 'an-independent-production-rate-key-secret',
+        'MAIL_TRANSPORT': 'smtp',
+        'SMTP_HOST': 'smtp.example.com',
+        'MAIL_FROM': 'security@example.com',
+        'SMTP_STARTTLS': 'true',
+        'SMTP_SSL': 'false',
+    }
+    values.update(change)
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=match):
         Settings.from_env()
 
 
@@ -470,11 +546,11 @@ def test_recovery_and_session_changes_are_audited(sink_client, sink):
     assert {'auth.recovery_requested', 'auth.password_reset'} <= actions
 
 
-# --- Proving control of an address (local sink only; no provider is configured) --------
+# --- Proving control of an address (local sink, so tests send no external mail) ----------
 #
-# Delivery to a real inbox is still blocked on the provider decision. Ownership
-# verification itself is not: it is exercised end to end against the sink, exactly as
-# recovery is, so the only thing missing at production is the transport.
+# A production deployment can configure the SMTP transport after its provider and sending
+# identity are approved. Ownership verification itself is exercised end to end against the
+# sink, exactly as recovery is, without making the test suite depend on an external service.
 
 def verification_token(sink):
     """The token as the user would receive it, parsed out of the message body."""
@@ -665,7 +741,7 @@ def test_deletion_does_not_touch_another_workspace(client, owner, second_client,
 
 
 def test_a_shared_workspace_is_refused_rather_than_half_deleted(client, owner, app):
-    """Membership is planned but not built; a second member's rows are not ours to erase."""
+    """An active member must be explicitly removed before shared data is erased."""
     with app.state.database.session() as db:
         db.add(User(id='second-member', email='colleague@example.com',
                     workspace_id=owner['workspace_id'], name='Colleague',

@@ -18,33 +18,37 @@ holds one. `GET /api/v1/permissions` returns the table and the caller's place in
 | `compliance.review` — approve, reject or supersede an import-readiness review | ✓ | | ✓ | |
 | `workspace.export` — download the complete workspace export | ✓ | ✓ | | |
 | `audit.read` — read the workspace audit log | ✓ | | | |
-| `workspace.admin` — future workspace settings and membership | ✓ | | | |
+| `workspace.admin` — workspace membership and invitations | ✓ | | | |
 
 The separation that matters: an **analyst** does the research and owns the commercial
 assumptions but cannot clear a compliance gate. A gate the researcher can clear is not a
-gate. Only `compliance.review` resolves import readiness, and today that is by design not
-reachable from the Decision Room dropdown.
+gate. Only `compliance.review` resolves import readiness, and it is not reachable from the
+Decision Room dropdown. A reviewer also cannot decide a request they submitted themselves,
+including an owner who otherwise holds every permission.
 
-Membership management is **not implemented**: every registered user is the `owner` of a new
-workspace, and there is no invitation flow. The `analyst`, `reviewer` and `viewer` roles are
-enforced but can currently only be set directly in the database. Team access is action plan
-item C03.
+The owner can invite an `analyst`, `reviewer` or `viewer`, change a non-owner's role, revoke a
+pending invitation, and remove a member. Invitations are email-bound, hashed in storage,
+single-use and expire after seven days. Removing a member immediately revokes every session
+and suspends the identity so its historical audit attribution remains intact; a later fresh
+invitation to the same workspace may reactivate it with a new password.
 
 ## What is stored
 
 | Data | Where | Notes |
 | --- | --- | --- |
-| Account | `users` | Email, display name, password hash (scrypt, self-describing parameters), role, and the time email ownership was verified. No password is ever stored or logged. |
-| Session | `sessions` | SHA-256 of the session token, user id, expiry. The token itself only exists in the cookie. |
+| Account | `users` | Email, display name, password hash (scrypt, self-describing parameters), role, verification time and optional suspension time. No password is ever stored or logged. |
+| Session | `sessions` | SHA-256 of the session token, user id, start/expiry times and a truncated browser client hint. The token itself only exists in the cookie. |
 | Recovery credential | `recovery_tokens` | SHA-256 of a short-lived reset or email-verification token, its purpose, user id, expiry and use time. The bearer token itself exists outside the database only in a sink/provider message or the operator's one-time handoff. |
+| Workspace invitation | `invitations` | Workspace, invited email and role, inviter, timestamps, and SHA-256 of the single-use token. List responses never expose the bearer token. |
 | Workspace records | `records` | Products, research jobs, saved assessments, supplier quotes, watch rules — as JSON documents scoped by `workspace_id`. |
 | Audit events | `audit_events` | Actor, workspace, action, target record, request id, and small non-secret facts (a verdict, a formula version, an export scope). Never a payload, a body or a credential. |
 | Rate windows | `rate_buckets` | A counter and an expiry. Account addresses and network addresses are represented by HMAC-SHA-256 using a deployment-only key, not stored raw or as an enumerable plain hash. These are still pseudonymous identifiers, not anonymous data. |
 
-There are **no application third parties** in this release. No collector is connected,
-nothing is sent to an external service, and no analytics or error-reporting SDK runs in the
-browser. The interface uses the visitor's system fonts; its production Content Security
-Policy permits no third-party browser origin.
+There is no connected collector, browser analytics or error-reporting SDK in this release.
+The interface uses the visitor's system fonts and its production Content Security Policy
+permits no third-party browser origin. A production operator may configure an SMTP provider
+for account/invitation messages and a private S3 destination for encrypted offsite backups;
+those processors, regions and retention terms must be named in the pilot notice before use.
 
 Demo examples are stored separately: they live in the visitor's own browser storage, are
 labelled `Demo` in the app and in every download, and are never sent to the API.
@@ -77,40 +81,43 @@ deployment secret `METRICS_TOKEN`; no workspace role grants service-operator acc
 | Expired sessions | Deleted by `purge_expired()`, which runs at startup. Only rows whose own expiry has passed. |
 | Finished rate windows | Same sweep, same rule. An active window keeps counting. |
 | Recovery credentials | Same sweep. Used credentials remain only through their original validity window so reuse is distinguishable, then their hashes are deleted. |
-| Audit events | Retained indefinitely. No retention limit is set. |
+| Invitations | Expired invitations are removed by the startup sweep. Accepted/revoked invitations remain until their original expiry; the audit trail retains the action under its own policy. |
+| Audit events | Deleted at startup when older than `AUDIT_RETENTION_DAYS` (default 365; production accepts 30–3650). The user-facing notice must state the configured value. |
 | Workspace records | Retained indefinitely. Saved assessments are immutable by design; a new input creates a new assessment. |
-| Backups | `scripts/backup_postgres.sh` prunes on `TRENDSELL_BACKUP_KEEP` days (default 14). A daily systemd timer template exists but is **not installed or enabled** — location, retention, RPO and off-host copy still need approval; see [the runbook](RUNBOOK.md). |
+| Backups | `scripts/backup_postgres.sh` prunes local dumps on `TRENDSELL_BACKUP_KEEP` days (default 14), writes a SHA-256 sidecar and can copy both to private S3 with server-side encryption. The timer is **not installed or enabled** and the destination/lifecycle/RPO still need approval; see [the runbook](RUNBOOK.md). |
 | Application/proxy logs | Host journal and nginx rotation/retention are deployment policy. They are **not yet recorded for production**. |
 
 ## Deletion
 
-Self-service deletion is implemented for the current one-person workspace. It requires the
-current password and the exact phrase `DELETE <workspace name>`, removes the account and every
-workspace record, audit event, session, recovery credential and account-scoped rate window from
-the live database, and signs the browser out. The screen tells the person to export first. A
-workspace with any additional member is refused rather than partially deleted.
+Self-service workspace deletion requires the owner password and the exact phrase
+`DELETE <workspace name>`. It removes every member identity, invitation, workspace record,
+audit event, session, recovery credential and account-scoped rate window from the live
+database, then signs the browser out. Active members must be explicitly removed first, so an
+owner cannot silently erase their access and shared data. The screen tells the owner to export
+first.
 
 Backups are not edited in place. Once production backups exist, a deleted record remains in an
-older retained backup until that backup expires under the agreed retention policy. Encryption
-at rest and off-host storage are deployment decisions that must be approved before the schedule
-is enabled. A restore
-procedure must preserve deletion requests made after the restored recovery point before the
+older retained backup until that backup expires under the agreed retention policy. The optional
+S3 path requests server-side encryption, but the bucket, IAM and lifecycle policy remain
+deployment decisions that must be approved before the schedule is enabled. A restore procedure
+must preserve deletion requests made after the restored recovery point before the
 copy can become the live service. The UI describes this distinction and does not promise that
 deletion rewrites historical backups.
 
 ## Account recovery
 
-**Implemented, but not self-deliverable.** Password reset/change, session listing/revocation,
-email-verification tokens and all corresponding browser screens exist and are tested end to
-end against a local mail sink. No production provider transport ships, so production requires
-`MAIL_TRANSPORT` to be empty and:
+Password reset/change, session listing/revocation, email-verification tokens and all
+corresponding browser screens exist and are tested end to end against a local mail sink. A
+standard SMTP transport supports STARTTLS or implicit TLS and optional authentication. It is
+self-deliverable only after a production operator configures an approved provider and sending
+identity:
 
-* `POST /api/v1/auth/recovery/request` answers exactly as it always does — the response
-  cannot reveal whether an account exists — but **mints no token and sends nothing**, and
-  logs a warning so an operator can see recovery being asked for while delivery is off.
-  Its `delivery_configured: false` field says plainly that no mail is coming.
-* A user who loses their password still has no self-service path. An operator has to follow
-  the lock-preserving procedure in [the runbook](RUNBOOK.md#a-locked-out-user-while-no-mail-transport-is-configured).
+* With `MAIL_TRANSPORT=smtp`, recovery and verification messages contain browser links whose
+  bearer tokens stay in URL fragments, out of proxy access logs. Delivery failures do not
+  turn recovery into an account-existence oracle.
+* With `MAIL_TRANSPORT` empty, recovery **mints no token and sends nothing**; its
+  `delivery_configured: false` response says no mail is coming. A locked-out user follows the
+  lock-preserving procedure in [the runbook](RUNBOOK.md#a-locked-out-user-while-no-mail-transport-is-configured).
 
 What is available today without any provider, to a user who is still signed in:
 
@@ -126,12 +133,12 @@ limited per address and per account. Every rejection — expired, spent, wrong p
 never existed — returns the same message. A password reset does not by itself mark the email
 address verified; only redeeming the purpose-bound email-verification credential does that.
 
-Registration defaults closed in production (`ALLOW_REGISTRATION=false`). A controlled intake
-must deliberately open it, enrol the selected pilot users, and close it again; membership and
-invitations do not yet exist.
+Registration defaults closed in production (`ALLOW_REGISTRATION=false`). The initial owner can
+be enrolled in a controlled registration window; after that, owner-managed, email-bound
+invitations add selected pilot members without reopening public registration.
 
-Verified email ownership is implemented, but the verification message cannot reach a real
-inbox without a provider. The operator reset procedure deliberately does not mark the address
+Verification and invitations cannot reach a real inbox until SMTP is configured. The operator
+reset procedure deliberately does not mark the address
 verified, because delivering a reset through another trusted channel proves identity but not
 control of that address.
 
@@ -140,11 +147,11 @@ control of that address.
 These must be settled with the product owner, not by engineering alone:
 
 1. A privacy notice that matches this file, given to pilot users before they enter data.
-2. Retention periods for audit events, logs and backups, plus the
+2. The configured audit period and retention periods for logs and backups, plus the
    post-restore handling of deletion requests.
 3. Recovery point and recovery time objectives, and a restore drill against production
    data (see [the runbook](RUNBOOK.md)).
-4. Either an explicit operator-supported recovery model for the pilot, or a provider and
-   sending identity followed by implementation and verification of a real transport.
+4. Either an explicit operator-supported recovery model for the pilot, or an SMTP provider,
+   verified sending identity and end-to-end deliverability monitoring.
 5. Journal/nginx log retention and access ownership, plus an on-call destination or an
    explicit decision that the pilot is monitored manually.

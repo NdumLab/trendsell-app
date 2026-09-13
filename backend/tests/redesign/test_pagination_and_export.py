@@ -249,7 +249,7 @@ def evidence_body(**overrides):
 
 
 @pytest.fixture
-def researched(client, owner):
+def researched(client, owner, workspace_reviewer):
     """A product carrying evidence and a review history, as a real workspace would."""
     job = client.post('/api/v1/xray', json={'input': 'https://www.amazon.com/dp/B0ABCDEFGH'},
                       headers={**HEADERS, 'Idempotency-Key': 'r05'}).json()
@@ -264,9 +264,10 @@ def researched(client, owner):
     # Two reviews, so the export has to carry the superseded one as well as the current.
     first = client.post(f'/api/v1/products/{product_id}/compliance/requests',
                         json={**REVIEW_REQUEST, 'product_id': product_id}, headers=HEADERS).json()
-    client.post(f'/api/v1/compliance/reviews/{first["id"]}/decision',
-                json={'status': 'more_information', 'rationale': 'Send the full specification sheet.'},
-                headers=HEADERS)
+    workspace_reviewer.post(f'/api/v1/compliance/reviews/{first["id"]}/decision',
+                            json={'status': 'more_information',
+                                  'rationale': 'Send the full specification sheet.'},
+                            headers=HEADERS)
     second = client.post(f'/api/v1/products/{product_id}/compliance/requests',
                          json={**REVIEW_REQUEST, 'product_id': product_id}, headers=HEADERS).json()
     return {'product_id': product_id, 'first_review': first['id'], 'second_review': second['id']}

@@ -1,4 +1,4 @@
-import { PASSWORD, expect, test, tokenFrom, uniqueEmail } from './fixtures';
+import { PASSWORD, expect, latestMessage, test, tokenFrom, uniqueEmail } from './fixtures';
 
 /** The browser half of account recovery and account security (action plan P03).
  *
@@ -43,7 +43,7 @@ test('a signed-in person can change their password, and the old one stops workin
   await expect(accepted).toBeHidden();
 });
 
-test('a locked-out person can reset their password from the sign-in dialog', async ({ page }) => {
+test('a locked-out person can reset their password from the emailed link', async ({ page }) => {
   const email = uniqueEmail();
   await page.request.post('/api/v1/auth/register', {
     headers: { 'X-Requested-With': 'TrendSell' },
@@ -57,9 +57,10 @@ test('a locked-out person can reset their password from the sign-in dialog', asy
   await dialog.getByRole('button', { name: 'Send a reset link' }).click();
 
   const token = await tokenFrom('password_reset');
-  await dialog.getByLabel('Reset token').fill(token);
-  await dialog.getByLabel('New password').fill(NEW_PASSWORD);
-  await dialog.getByRole('button', { name: 'Set a new password' }).click();
+  expect((await latestMessage('password_reset')).body).toContain(`/reset-password#token=${token}`);
+  await page.goto(`/reset-password#token=${token}`);
+  await page.getByLabel('New password').fill(NEW_PASSWORD);
+  await page.getByRole('button', { name: 'Set a new password' }).click();
   await expect(page.getByText(/Password reset/)).toBeVisible();
 
   const accepted = await signInThrough(page, email, NEW_PASSWORD);
@@ -104,15 +105,16 @@ test('a deployment without mail does not claim that it sent a reset message', as
   await expect(dialog.getByLabel('Reset token')).toBeVisible();
 });
 
-test('a person can prove they own their address', async ({ page, workspace }) => {
+test('a person can prove they own their address from the emailed link', async ({ page, workspace }) => {
   await page.goto('/settings');
   await expect(page.getByText('Not verified')).toBeVisible();
 
   const token = await tokenFrom('email_verification');
-  await page.getByLabel('Verification token').fill(token);
+  expect((await latestMessage('email_verification')).body).toContain(`/verify-email#token=${token}`);
+  await page.goto(`/verify-email#token=${token}`);
   await page.getByRole('button', { name: 'Verify this address' }).click();
-  await expect(page.getByText(/Email address verified/)).toBeVisible();
-  await page.reload();
+  await expect(page.getByText('Email address verified.')).toBeVisible();
+  await page.getByRole('link', { name: 'Open account settings' }).click();
   await expect(page.getByText(/^Verified /)).toBeVisible();
   expect(workspace.workspace).toBe('E2E workspace');
 });

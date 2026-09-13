@@ -1,10 +1,10 @@
-"""Outbound mail, and the local sink that makes recovery testable without a provider.
+"""Outbound mail transports and the local sink used by recovery tests.
 
-Action plan P03. The provider decision is not mine to make and is still open, so this
-deliberately ships *no* provider. What it does ship is the seam: the application always
-asks a `Mailer` to deliver, and which mailer it gets is configuration.
+Action plan P03. Provider choice remains a deployment decision. The application ships a
+standard authenticated SMTP transport plus development-only transports, and always asks a
+`Mailer` to deliver so an unconfigured deployment cannot pretend a message was sent.
 
-Three transports, because "not configured" and "configured wrongly" must not look alike:
+Four transports, because "not configured" and "configured wrongly" must not look alike:
 
 ``SinkMailer``          keeps messages in memory and, when given a directory, writes each
                         one as a file. This is the local mail sink P03 requires for tests
@@ -14,14 +14,16 @@ Three transports, because "not configured" and "configured wrongly" must not loo
                         waiting for.
 ``LoggingMailer``       records that a message was addressed, with no body and no address,
                         for development diagnostics before a provider exists.
-
-No transport here opens a socket. Adding a real provider means adding one class and one
-settings branch; nothing that calls `send()` changes.
+``SMTPMailer``          sends through a configured submission endpoint using implicit TLS
+                        or STARTTLS. Provider choice stays in deployment configuration.
 """
 from dataclasses import dataclass, field
+from email.message import EmailMessage
 from pathlib import Path
 import json
 import re
+import smtplib
+import ssl
 
 from .observability import logger
 
@@ -114,6 +116,45 @@ class LoggingMailer(Mailer):
         return message
 
 
+@dataclass(frozen=True)
+class SMTPMailer(Mailer):
+    """Deliver through a standard authenticated SMTP submission service."""
+    host: str
+    port: int
+    sender: str
+    username: str = ''
+    password: str = ''
+    starttls: bool = True
+    implicit_tls: bool = False
+    timeout: float = 15.0
+    configured = True
+
+    def send(self, message: Message):
+        if not deliverable(message.to):
+            raise MailNotConfigured('Address is not deliverable.')
+        if not deliverable(self.sender):
+            raise MailNotConfigured('MAIL_FROM is not a deliverable address.')
+
+        outgoing = EmailMessage()
+        outgoing['From'] = self.sender
+        outgoing['To'] = message.to
+        outgoing['Subject'] = message.subject
+        outgoing.set_content(message.body)
+
+        context = ssl.create_default_context()
+        client_type = smtplib.SMTP_SSL if self.implicit_tls else smtplib.SMTP
+        extra = {'context': context} if self.implicit_tls else {}
+        with client_type(self.host, self.port, timeout=self.timeout, **extra) as client:
+            if self.starttls:
+                client.ehlo()
+                client.starttls(context=context)
+                client.ehlo()
+            if self.username:
+                client.login(self.username, self.password)
+            client.send_message(outgoing)
+        return message
+
+
 def build(settings):
     """The transport this configuration asks for."""
     transport = (getattr(settings, 'mail_transport', '') or '').strip().lower()
@@ -122,4 +163,14 @@ def build(settings):
         return SinkMailer(Path(directory) if directory else None)
     if transport == 'log':
         return LoggingMailer()
+    if transport == 'smtp':
+        return SMTPMailer(
+            host=settings.smtp_host,
+            port=settings.smtp_port,
+            sender=settings.mail_from,
+            username=settings.smtp_username,
+            password=settings.smtp_password,
+            starttls=settings.smtp_starttls,
+            implicit_tls=settings.smtp_ssl,
+        )
     return UnconfiguredMailer()

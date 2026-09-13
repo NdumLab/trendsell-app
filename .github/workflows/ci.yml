@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
 
 permissions:
@@ -136,11 +136,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Build from the checkout with no local state
+      - name: Install the exact frontend dependency lock
         working-directory: frontend
+        run: npm ci
+      - name: Build the versioned release artifact twice
         run: |
-          npm ci
-          npm run build
+          scripts/build_release_artifact.sh "$RUNNER_TEMP/release-first"
+          scripts/build_release_artifact.sh "$RUNNER_TEMP/release-second"
+          cmp "$RUNNER_TEMP/release-first/trendsell-${GITHUB_SHA:0:12}.tar.gz" \
+              "$RUNNER_TEMP/release-second/trendsell-${GITHUB_SHA:0:12}.tar.gz"
+          (cd "$RUNNER_TEMP/release-first" && \
+            sha256sum --check "trendsell-${GITHUB_SHA:0:12}.tar.gz.sha256")
+      - name: Scan the unpacked artifact without logging credential values
+        run: |
+          mkdir "$RUNNER_TEMP/release-unpacked"
+          tar -xzf "$RUNNER_TEMP/release-first/trendsell-${GITHUB_SHA:0:12}.tar.gz" \
+              -C "$RUNNER_TEMP/release-unpacked"
+          scripts/scan_secrets.sh --directory "$RUNNER_TEMP/release-unpacked"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -155,6 +167,12 @@ jobs:
           EOF
           cd backend && APP_ENV=test DATABASE_URL=sqlite:// CORS_ORIGINS=http://localhost:3000 \
             python -c "from app.main import create_app; from app.settings import Settings; create_app(Settings.from_env()); print('API imports cleanly')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trendsell-release-${{ github.sha }}
+          path: ${{ runner.temp }}/release-first/*
+          if-no-files-found: error
+          retention-days: 14
 
   secret-scan:
     name: Secret scan
@@ -163,22 +181,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Reject credential-shaped strings in tracked files
-        run: |
-          set +e
-          PATTERN='(sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[abpr]-[0-9A-Za-z-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)'
-          HITS=$(git ls-files -z | xargs -0 grep -InE "$PATTERN" -- 2>/dev/null | grep -v '^\.github/workflows/ci.yml:')
-          if [ -n "$HITS" ]; then echo "$HITS"; echo "Credential-shaped strings found. Rotate the key and remove it from history."; exit 1; fi
-          echo "No credential-shaped strings in tracked files."
-      - name: The example environment file carries no values
-        run: |
-          if grep -nE '^[A-Z_]+=(sk-|ghp_|AKIA|AIza|xox)' .env.example; then
-            echo ".env.example must document variables, never values"; exit 1
-          fi
-          echo ".env.example is clean."
+      - name: Reject credential-shaped strings in tracked files and reachable history
+        run: scripts/scan_secrets.sh --tracked --history
 
   dependency-scan:
-    name: Dependency scan
+    name: Dependency and license scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -188,6 +195,7 @@ jobs:
       - run: pip install pip-audit
       - run: pip-audit --requirement backend/requirements.lock --strict
       - run: pip-audit --requirement backend/requirements-dev.lock --strict
+      - run: pip install -r backend/requirements-dev.lock
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -195,3 +203,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm audit --audit-level=high
         working-directory: frontend
+      - run: npm ci
+        working-directory: frontend
+      - name: Enforce the dependency-license policy and exact inventory
+        run: python scripts/check_dependency_licenses.py --check-report docs/DEPENDENCY_LICENSES.md

@@ -27,6 +27,18 @@ if [ ! -r "$dump" ]; then
   echo "cannot read dump: $dump" >&2
   exit 2
 fi
+checksum="$dump.sha256"
+if [ ! -r "$checksum" ]; then
+  echo "cannot verify dump: checksum sidecar is missing: $checksum" >&2
+  exit 2
+fi
+dump_dir="$(cd "$(dirname "$dump")" && pwd)"
+dump_name="$(basename "$dump")"
+checksum_name="$(basename "$checksum")"
+if ! (cd "$dump_dir" && sha256sum --check "$checksum_name" >/dev/null); then
+  echo "cannot restore dump: SHA-256 verification failed" >&2
+  exit 1
+fi
 case "$target" in
   *[!a-zA-Z0-9_]*) echo "database name must be alphanumeric or underscore: $target" >&2; exit 2 ;;
 esac

@@ -23,9 +23,8 @@ class Settings:
     #: are fleet-wide, so they are not a workspace's to read: owning a workspace is not
     #: operating the service. Unset means the surface is off, which is the default.
     metrics_token: str = ''
-    #: Outbound mail transport (action plan P03): '' (none), 'sink' or 'log'. No provider
-    #: is shipped -- that decision is still open -- so recovery reports itself unavailable
-    #: rather than silently dropping a reset a user is waiting for.
+    #: Outbound mail transport (action plan P03): '' (none), 'sink', 'log' or 'smtp'.
+    #: Sink/log are development diagnostics; SMTP is the production transport.
     mail_transport: str = ''
     #: Where a 'sink' transport writes each message, for a developer exercising the flow.
     mail_sink_dir: str = ''
@@ -37,6 +36,24 @@ class Settings:
     #: HMAC key for network/email rate buckets. Production requires an independent random
     #: value so their small input spaces cannot be enumerated from a database copy.
     rate_key_secret: str = 'development-only-rate-key-secret'
+    #: Audit events are useful for investigation but still carry pseudonymous user and
+    #: workspace identifiers. Production therefore requires an explicit bounded policy.
+    audit_retention_days: int = 365
+    smtp_host: str = ''
+    smtp_port: int = 587
+    smtp_username: str = ''
+    smtp_password: str = ''
+    mail_from: str = ''
+    smtp_starttls: bool = True
+    smtp_ssl: bool = False
+    #: Browser origin used in one-time action links. When unset, the first explicit CORS
+    #: origin is used; production operators should set this when the UI has several
+    #: allowed origins so messages always lead to the canonical host.
+    public_app_url: str = ''
+    #: Invitation delivery has its own abuse limits: one owner cannot turn the service
+    #: into a bulk sender, and one recipient cannot be flooded by several workspaces.
+    invitation_workspace_hourly_limit: int = 20
+    invitation_email_daily_limit: int = 3
 
     @classmethod
     def from_env(cls):
@@ -66,13 +83,36 @@ class Settings:
             raise ValueError('SCHEMA_RECHECK_SECONDS must be between 0 and 3600')
 
         transport = os.getenv('MAIL_TRANSPORT', '').strip().lower()
-        if transport not in {'', 'sink', 'log'}:
-            raise ValueError("MAIL_TRANSPORT must be '', 'sink' or 'log'")
-        if env == 'production' and transport:
+        if transport not in {'', 'sink', 'log', 'smtp'}:
+            raise ValueError("MAIL_TRANSPORT must be '', 'sink', 'log' or 'smtp'")
+        if env == 'production' and transport in {'sink', 'log'}:
             raise ValueError(
-                'No production mail transport ships with this release. '
-                'MAIL_TRANSPORT must be empty in production; sink and log are '
-                'development diagnostics, not delivery.')
+                'MAIL_TRANSPORT sink and log are development diagnostics, not delivery.')
+
+        def enabled(name, default):
+            value = os.getenv(name, default).strip().lower()
+            if value not in {'true', 'false'}:
+                raise ValueError(f'{name} must be true or false')
+            return value == 'true'
+
+        smtp_host = os.getenv('SMTP_HOST', '').strip()
+        smtp_port = int(os.getenv('SMTP_PORT', '587'))
+        smtp_username = os.getenv('SMTP_USERNAME', '')
+        smtp_password = os.getenv('SMTP_PASSWORD', '')
+        mail_from = os.getenv('MAIL_FROM', '').strip()
+        smtp_starttls = enabled('SMTP_STARTTLS', 'true')
+        smtp_ssl = enabled('SMTP_SSL', 'false')
+        if smtp_port < 1 or smtp_port > 65535:
+            raise ValueError('SMTP_PORT must be between 1 and 65535')
+        if smtp_starttls and smtp_ssl:
+            raise ValueError('SMTP_STARTTLS and SMTP_SSL cannot both be true')
+        if bool(smtp_username) != bool(smtp_password):
+            raise ValueError('SMTP_USERNAME and SMTP_PASSWORD must either both be set or both be empty')
+        if transport == 'smtp':
+            if not smtp_host or not mail_from:
+                raise ValueError('SMTP_HOST and MAIL_FROM are required when MAIL_TRANSPORT=smtp')
+            if env == 'production' and not (smtp_starttls or smtp_ssl):
+                raise ValueError('Production SMTP requires SMTP_STARTTLS=true or SMTP_SSL=true')
 
         rate_key_secret = os.getenv(
             'RATE_KEY_SECRET',
@@ -80,14 +120,29 @@ class Settings:
         if env == 'production' and len(rate_key_secret) < 32:
             raise ValueError('RATE_KEY_SECRET must be an independent random value of at least 32 characters in production')
 
-        return cls(env, url, origins,
-                   os.getenv('ALLOW_REGISTRATION', 'false' if env == 'production' else 'true') == 'true', limit,
-                   hourly('LOGIN_IP_HOURLY_LIMIT', 30),
-                   hourly('LOGIN_ACCOUNT_HOURLY_LIMIT', 10),
-                   hourly('REGISTER_IP_HOURLY_LIMIT', 10),
-                   hourly('WORKSPACE_WRITE_MINUTE_LIMIT', 60),
-                   os.getenv('METRICS_TOKEN', ''),
-                   transport,
-                   os.getenv('MAIL_SINK_DIR', ''),
-                   recheck,
-                   rate_key_secret)
+        audit_retention_days = int(os.getenv('AUDIT_RETENTION_DAYS', '365'))
+        if audit_retention_days < 30 or audit_retention_days > 3650:
+            raise ValueError('AUDIT_RETENTION_DAYS must be between 30 and 3650')
+
+        public_app_url = os.getenv('PUBLIC_APP_URL', '').strip().rstrip('/')
+        if public_app_url and (not public_app_url.startswith(('http://', 'https://'))
+                               or (env == 'production' and not public_app_url.startswith('https://'))):
+            raise ValueError('PUBLIC_APP_URL must be an HTTPS origin in production')
+
+        return cls(
+            environment=env, database_url=url, origins=origins,
+            allow_registration=os.getenv(
+                'ALLOW_REGISTRATION', 'false' if env == 'production' else 'true') == 'true',
+            research_daily_limit=limit,
+            login_ip_hourly_limit=hourly('LOGIN_IP_HOURLY_LIMIT', 30),
+            login_account_hourly_limit=hourly('LOGIN_ACCOUNT_HOURLY_LIMIT', 10),
+            register_ip_hourly_limit=hourly('REGISTER_IP_HOURLY_LIMIT', 10),
+            workspace_write_minute_limit=hourly('WORKSPACE_WRITE_MINUTE_LIMIT', 60),
+            metrics_token=os.getenv('METRICS_TOKEN', ''), mail_transport=transport,
+            mail_sink_dir=os.getenv('MAIL_SINK_DIR', ''), schema_recheck_seconds=recheck,
+            rate_key_secret=rate_key_secret, audit_retention_days=audit_retention_days,
+            smtp_host=smtp_host, smtp_port=smtp_port, smtp_username=smtp_username,
+            smtp_password=smtp_password, mail_from=mail_from, smtp_starttls=smtp_starttls,
+            smtp_ssl=smtp_ssl, public_app_url=public_app_url,
+            invitation_workspace_hourly_limit=hourly('INVITATION_WORKSPACE_HOURLY_LIMIT', 20),
+            invitation_email_daily_limit=hourly('INVITATION_EMAIL_DAILY_LIMIT', 3))

@@ -13,8 +13,10 @@ from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 from . import migrate
 from .settings import Settings
-from .db import Database, Workspace, User, Session, RecoveryToken, Record, Audit, RateBucket, records, audit, now, uid
-from .security import dummy_verify, hash_password, verify_password, keyed_hash, token_hash, consume, purge_expired, resolve_input
+from .db import (Database, Workspace, User, Session, RecoveryToken, Invitation, Record,
+                 Audit, RateBucket, records, audit, now, uid)
+from .security import (dummy_verify, hash_password, verify_password, keyed_hash, token_hash,
+                       consume, purge_expired, purge_old_audit_events, resolve_input)
 from .limits import BodyLimit, MAX_BODY_BYTES
 from .observability import Counters, REQUEST_ID, USER_ID, WORKSPACE_ID, logger, new_request_id, route_label
 from .permissions import matrix, require
@@ -89,6 +91,18 @@ class PasswordChange(StrictModel):
 class VerificationConfirm(StrictModel):
     token: Annotated[str, StringConstraints(strip_whitespace=False, min_length=20, max_length=200)]
 
+class InvitationCreate(StrictModel):
+    email: str = Field(min_length=5, max_length=254, pattern=r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+    role: Literal['analyst', 'reviewer', 'viewer']
+
+class InvitationAccept(StrictModel):
+    token: Annotated[str, StringConstraints(strip_whitespace=False, min_length=20, max_length=200)]
+    name: str = Field(min_length=1, max_length=80)
+    password: Password
+
+class MemberRoleChange(StrictModel):
+    role: Literal['analyst', 'reviewer', 'viewer']
+
 class AccountDeletion(StrictModel):
     password: Password
     confirmation: str = Field(min_length=8, max_length=200)
@@ -158,6 +172,12 @@ def create_app(settings=None):
             # Expired sessions, recovery credentials and finished rate windows accumulate
             # otherwise; only rows whose own expiry has passed are removed (action plan P04).
             purge_expired(db)
+            removed_audit = purge_old_audit_events(db, settings.audit_retention_days)
+            if removed_audit:
+                logger.info('audit retention applied', extra={'context': {
+                    'removed': removed_audit,
+                    'retention_days': settings.audit_retention_days,
+                }})
         yield
         database.engine.dispose()
 
@@ -263,7 +283,7 @@ def create_app(settings=None):
         if not session or session.expires_at <= now():
             raise HTTPException(401, 'Sign in to your workspace to continue.')
         user = db.get(User, session.user_id)
-        if not user: raise HTTPException(401, 'Session is no longer valid.')
+        if not user or user.disabled_at: raise HTTPException(401, 'Session is no longer valid.')
         # Both: the context variables serve `audit()` on this same thread, and the request
         # scope carries the identity back out to the logging middleware (R11).
         WORKSPACE_ID.set(user.workspace_id)
@@ -463,7 +483,8 @@ def create_app(settings=None):
     def config():
         return {'allow_registration':settings.allow_registration, 'destination':'NG', 'demo':False,
                 'research_daily_limit':settings.research_daily_limit,
-                'mail_delivery_configured':mailer.configured}
+                'mail_delivery_configured':mailer.configured,
+                'audit_retention_days':settings.audit_retention_days}
 
     @app.post('/api/v1/auth/register', status_code=201)
     def register(payload: Credentials, request: Request, response: Response, db=Depends(get_db)):
@@ -502,7 +523,7 @@ def create_app(settings=None):
         consume(db, f'login-account:{rate_identity(email)}:{now()[:13]}', settings.login_account_hourly_limit,
                 message='Too many sign-in attempts for this account. Try again later.')
         user = db.query(User).filter_by(email=email).first()
-        if not user:
+        if not user or user.disabled_at:
             dummy_verify(payload.password)   # equalise timing; the account may not exist
             raise HTTPException(401, 'Email or password is incorrect.')
         ok, needs_rehash = verify_password(payload.password, user.password_hash)
@@ -529,11 +550,9 @@ def create_app(settings=None):
 
     # --- Account recovery and session management (action plan P03) ---------------------
     #
-    # Delivery is still blocked on a provider decision, so nothing here sends mail by
-    # itself: it hands a `Message` to whatever transport is configured, and the default
-    # transport refuses. Everything either side of that seam is implemented and tested
-    # against a local sink. A real provider still requires a transport implementation,
-    # configuration, delivery monitoring and a release; the runbook says so explicitly.
+    # Nothing here sends mail unless a transport is configured. Tests use the local sink;
+    # production can use the TLS-enforced SMTP transport after its sending identity,
+    # credentials, DNS authentication and delivery monitoring are verified.
     #
     # Review finding R02 made this urgent rather than merely planned: a normalisation bug
     # locked valid accounts out, and there was no way for an affected person to get back
@@ -546,6 +565,16 @@ def create_app(settings=None):
     RESET_PURPOSE = 'password_reset'
     EMAIL_TTL_HOURS = 24
     EMAIL_PURPOSE = 'email_verification'
+
+    def action_url(path, token):
+        """A browser link whose bearer credential stays out of HTTP access logs.
+
+        URL fragments are handled only by the browser, so reverse proxies never receive
+        the token. The first explicit CORS origin is the safe default for single-origin
+        deployments; PUBLIC_APP_URL selects the canonical UI in multi-origin setups.
+        """
+        base = (settings.public_app_url or settings.origins[0]).rstrip('/')
+        return f'{base}/{path}#token={token}'
 
     def client_label(request):
         """A short, non-identifying hint so a person can recognise their own session."""
@@ -584,6 +613,7 @@ def create_app(settings=None):
         mailer.send(mail.Message(
             to=user.email, purpose=EMAIL_PURPOSE, subject='Verify your TrendSell email',
             body=('Verify that you control this address for your TrendSell workspace.\n\n'
+                  f'Open verification: {action_url("verify-email", token)}\n\n'
                   f'Verification token: {token}\n\n'
                   f'It can be used once, and expires in {EMAIL_TTL_HOURS} hours.')))
 
@@ -609,7 +639,11 @@ def create_app(settings=None):
                 message='Too many recovery requests from this address. Try again later.')
         consume(db, f'recover-account:{rate_identity(email)}:{now()[:13]}', settings.login_account_hourly_limit,
                 message='Too many recovery requests. Check your inbox, or try again later.')
-        user = db.query(User).filter_by(email=email).first()
+        # A removed member is not a recoverable account. Treat it exactly like an unknown
+        # address: the public response stays identical, but no useless credential or mail
+        # is created for an identity that still cannot sign in. A fresh owner invitation
+        # is the only path that deliberately reactivates suspended membership.
+        user = db.query(User).filter_by(email=email, disabled_at=None).first()
         if user and mailer.configured:
             token = issue_reset(db, user)
             audit(db, user, 'auth.recovery_requested')
@@ -619,6 +653,7 @@ def create_app(settings=None):
                     to=user.email, purpose=RESET_PURPOSE,
                     subject='Reset your TrendSell password',
                     body=('Someone asked to reset the password for this TrendSell workspace.\n\n'
+                          f'Open password reset: {action_url("reset-password", token)}\n\n'
                           f'Reset token: {token}\n\n'
                           f'It can be used once, and expires in {RESET_TTL_MINUTES} minutes.\n'
                           'If this was not you, no action is needed: nothing has changed.')))
@@ -679,7 +714,7 @@ def create_app(settings=None):
         # Whoever prompted the reset may be holding a stolen session. Ending all of them,
         # including this browser's, is the point of a reset.
         revoked = revoke_sessions(db, user)
-        audit(db, user, 'auth.password_reset', detail={'sessions_revoked': revoked})
+        audit(db, user, 'auth.password_reset', sessions_revoked=revoked)
         db.commit()
         return {'status': 'password_reset', 'sessions_revoked': revoked}
 
@@ -722,6 +757,169 @@ def create_app(settings=None):
         db.commit()
         return {'status': 'email_verified', 'email_verified_at': verified_at}
 
+    # --- Controlled workspace intake and membership ---------------------------------
+
+    INVITATION_TTL_DAYS = 7
+
+    def invitation_view(row):
+        return {'id': row.id, 'email': row.email, 'role': row.role,
+                'created_at': row.created_at, 'expires_at': row.expires_at,
+                'sent_at': row.sent_at, 'accepted_at': row.accepted_at,
+                'revoked_at': row.revoked_at}
+
+    @app.get('/api/v1/workspace/members')
+    def workspace_members(user=Depends(permitted('workspace.admin')), db=Depends(get_db)):
+        members = (db.query(User).filter_by(workspace_id=user.workspace_id, disabled_at=None)
+                   .order_by(User.email.asc()).all())
+        invitations = (db.query(Invitation).filter_by(workspace_id=user.workspace_id)
+                       .filter(Invitation.accepted_at.is_(None), Invitation.revoked_at.is_(None),
+                               Invitation.expires_at > now())
+                       .order_by(Invitation.created_at.desc()).all())
+        return {'members': [user_view(member) for member in members],
+                'invitations': [invitation_view(invitation) for invitation in invitations]}
+
+    @app.post('/api/v1/workspace/invitations', status_code=201)
+    def invite_member(payload: InvitationCreate,
+                      user=Depends(permitted('workspace.admin')), db=Depends(get_db)):
+        if not mailer.configured:
+            raise HTTPException(503, 'Outbound mail is not configured. Configure delivery before inviting members.')
+        email = payload.email.lower().strip()
+        consume(db, f'invite-workspace:{user.workspace_id}:{now()[:13]}',
+                settings.invitation_workspace_hourly_limit,
+                message='This workspace has sent too many invitations. Try again later.')
+        consume(db, f'invite-email:{rate_identity(email)}:{now()[:10]}',
+                settings.invitation_email_daily_limit,
+                message='Too many invitations were sent to this address. Try again later.')
+        # Do not make this owner-only endpoint an account-existence oracle. An address
+        # that already belongs to another workspace gets the same pending invitation and
+        # delivery behavior as any other address. The recipient already controls the
+        # mailbox; acceptance can safely explain that one account cannot join two
+        # workspaces while the current one-workspace data model is in place.
+        # Lock a row that always exists before testing the invitation unique key. This
+        # serializes first-time invitations too; locking an absent invitation row cannot.
+        db.execute(select(Workspace).where(Workspace.id == user.workspace_id)
+                   .with_for_update()).scalar_one()
+        token = secrets.token_urlsafe(32)
+        invitation = (db.query(Invitation)
+                      .filter_by(workspace_id=user.workspace_id, email=email)
+                      .with_for_update().first())
+        values = {
+            'role': payload.role,
+            'token_hash': token_hash(token),
+            'invited_by': user.id,
+            'expires_at': (datetime.now(timezone.utc) + timedelta(days=INVITATION_TTL_DAYS)).isoformat(),
+            'created_at': now(), 'sent_at': None, 'accepted_at': None, 'revoked_at': None,
+        }
+        if invitation:
+            for field, value in values.items():
+                setattr(invitation, field, value)
+        else:
+            invitation = Invitation(workspace_id=user.workspace_id, email=email, **values)
+            db.add(invitation)
+        audit(db, user, 'workspace.invitation_created', role=payload.role)
+        db.commit()
+        try:
+            mailer.send(mail.Message(
+                to=email, purpose='workspace_invitation', subject='Join a TrendSell workspace',
+                body=('You were invited to a TrendSell workspace.\n\n'
+                      f'Open invitation: {action_url("accept-invitation", token)}\n\n'
+                      f'Invitation token: {token}\n\n'
+                      f'It can be used once and expires in {INVITATION_TTL_DAYS} days. '
+                      'If you were not expecting this invitation, no action is needed.')))
+        except Exception as problem:
+            logger.warning('invitation mail undelivered', extra={'context': {
+                'purpose': 'workspace_invitation', 'error_type': type(problem).__name__}})
+            raise HTTPException(503, 'The invitation was created but could not be delivered. Try sending it again.')
+        invitation.sent_at = now()
+        db.commit()
+        return invitation_view(invitation)
+
+    @app.delete('/api/v1/workspace/invitations/{invitation_id}')
+    def revoke_invitation(invitation_id: str,
+                          user=Depends(permitted('workspace.admin')), db=Depends(get_db)):
+        invitation = (db.query(Invitation)
+                      .filter_by(id=invitation_id, workspace_id=user.workspace_id)
+                      .with_for_update().first())
+        if not invitation or invitation.accepted_at:
+            raise HTTPException(404, 'Pending invitation not found in this workspace.')
+        invitation.revoked_at = now()
+        audit(db, user, 'workspace.invitation_revoked', role=invitation.role)
+        db.commit()
+        return {'status': 'revoked'}
+
+    @app.post('/api/v1/auth/invitations/accept', status_code=201)
+    def accept_invitation(payload: InvitationAccept, request: Request, response: Response,
+                          db=Depends(get_db)):
+        invitation = db.execute(
+            select(Invitation).where(Invitation.token_hash == token_hash(payload.token))
+            .with_for_update()).scalar_one_or_none()
+        if (not invitation or invitation.accepted_at or invitation.revoked_at
+                or invitation.expires_at <= now()):
+            raise HTTPException(400, 'This invitation is no longer valid. Ask the workspace owner to send another.')
+        existing = db.execute(select(User).where(User.email == invitation.email)
+                              .with_for_update()).scalar_one_or_none()
+        if existing and not (existing.disabled_at
+                             and existing.workspace_id == invitation.workspace_id):
+            raise HTTPException(409, 'That email already belongs to a TrendSell account.')
+        if existing:
+            member = existing
+            member.name = payload.name
+            member.password_hash = hash_password(payload.password)
+            member.role = invitation.role
+            member.email_verified_at = now()
+            member.disabled_at = None
+        else:
+            member = User(workspace_id=invitation.workspace_id, email=invitation.email,
+                          name=payload.name, password_hash=hash_password(payload.password),
+                          role=invitation.role, email_verified_at=now())
+            db.add(member)
+        invitation.accepted_at = now()
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, 'That email already belongs to a TrendSell account.')
+        audit(db, member, 'workspace.invitation_accepted', role=invitation.role)
+        return start_session(db, member, response, request)
+
+    @app.post('/api/v1/workspace/members/{member_id}/role')
+    def change_member_role(member_id: str, payload: MemberRoleChange,
+                           user=Depends(permitted('workspace.admin')), db=Depends(get_db)):
+        member = db.execute(select(User).where(
+            User.id == member_id, User.workspace_id == user.workspace_id,
+            User.disabled_at.is_(None)).with_for_update()).scalar_one_or_none()
+        if not member:
+            raise HTTPException(404, 'Member not found in this workspace.')
+        if member.id == user.id or member.role == 'owner':
+            raise HTTPException(409, 'The workspace owner role cannot be changed here.')
+        previous = member.role
+        member.role = payload.role
+        audit(db, user, 'workspace.member_role_changed', member_id=member.id,
+              from_role=previous, to_role=payload.role)
+        db.commit()
+        return user_view(member)
+
+    @app.delete('/api/v1/workspace/members/{member_id}')
+    def remove_member(member_id: str,
+                      user=Depends(permitted('workspace.admin')), db=Depends(get_db)):
+        """Revoke a non-owner's access while retaining their audit identity."""
+        member = db.execute(select(User).where(
+            User.id == member_id, User.workspace_id == user.workspace_id,
+            User.disabled_at.is_(None)).with_for_update()).scalar_one_or_none()
+        if not member:
+            raise HTTPException(404, 'Member not found in this workspace.')
+        if member.id == user.id or member.role == 'owner':
+            raise HTTPException(409, 'The workspace owner cannot be removed here.')
+        revoked = revoke_sessions(db, member)
+        db.query(RecoveryToken).filter(
+            RecoveryToken.user_id == member.id,
+            RecoveryToken.used_at.is_(None)).update({'used_at': now()}, synchronize_session=False)
+        member.disabled_at = now()
+        audit(db, user, 'workspace.member_removed', member_id=member.id,
+              role=member.role, sessions_revoked=revoked)
+        db.commit()
+        return {'status': 'removed', 'sessions_revoked': revoked}
+
     @app.post('/api/v1/auth/password')
     def change_password(payload: PasswordChange, request: Request, user=Depends(current_user), db=Depends(get_db)):
         """Change a password while signed in, keeping only the session doing it."""
@@ -737,7 +935,7 @@ def create_app(settings=None):
                                            {'used_at': now()}, synchronize_session=False)
         current = token_hash(request.cookies.get('trendsell_session', ''))
         revoked = revoke_sessions(db, user, keep=current)
-        audit(db, user, 'auth.password_changed', detail={'sessions_revoked': revoked})
+        audit(db, user, 'auth.password_changed', sessions_revoked=revoked)
         db.commit()
         return {'status': 'password_changed', 'sessions_revoked': revoked}
 
@@ -770,41 +968,53 @@ def create_app(settings=None):
             raise HTTPException(404, 'That session is not open on this account.')
         was_current = target.token_hash == token_hash(request.cookies.get('trendsell_session', ''))
         db.delete(target)
-        audit(db, user, 'auth.session_revoked', detail={'was_current': was_current})
+        audit(db, user, 'auth.session_revoked', was_current=was_current)
         db.commit()
         return {'status': 'revoked', 'was_current': was_current}
 
     @app.delete('/api/v1/auth/account')
-    def delete_account(payload: AccountDeletion, response: Response, user=Depends(current_user), db=Depends(get_db)):
-        """Delete this one-person pilot workspace after password and phrase confirmation."""
+    def delete_account(payload: AccountDeletion, response: Response,
+                       user=Depends(permitted('workspace.admin')), db=Depends(get_db)):
+        """Delete an owner-only workspace after password and phrase confirmation."""
         user = db.execute(select(User).where(User.id == user.id).with_for_update()).scalar_one()
         ok, _ = verify_password(payload.password, user.password_hash)
         if not ok:
             raise HTTPException(403, 'Password is incorrect.')
-        workspace = db.get(Workspace, user.workspace_id)
+        workspace = db.execute(select(Workspace).where(
+            Workspace.id == user.workspace_id).with_for_update()).scalar_one()
         expected = f'DELETE {workspace.name}'
         if payload.confirmation != expected:
             raise HTTPException(422, f'Type {expected} exactly to delete this workspace.')
-        workspace_id, user_id, email = user.workspace_id, user.id, user.email
-        # Registration is the only way an account exists today, so a workspace holds one
-        # person. Membership is planned (see permissions.py), and a second member's rows
-        # are not this person's to erase — refuse rather than orphan or half-delete them.
-        others = db.query(User).filter(User.workspace_id == workspace_id, User.id != user_id).count()
-        if others:
+        workspace_id = user.workspace_id
+        # Active members must be explicitly removed first so the owner cannot silently
+        # erase their access and shared data. Suspended identities remain only to preserve
+        # audit attribution and must not make the workspace impossible to delete.
+        active_others = db.query(User).filter(
+            User.workspace_id == workspace_id, User.id != user.id,
+            User.disabled_at.is_(None)).count()
+        if active_others:
             raise HTTPException(409, 'This workspace has other members. Deleting a shared '
-                                     'workspace is not supported yet.')
+                                     'workspace requires removing them first.')
+        members = db.query(User).filter_by(workspace_id=workspace_id).all()
+        member_ids = [member.id for member in members]
         db.query(Record).filter_by(workspace_id=workspace_id).delete(synchronize_session=False)
         db.query(Audit).filter_by(workspace_id=workspace_id).delete(synchronize_session=False)
-        db.query(Session).filter_by(user_id=user_id).delete(synchronize_session=False)
-        db.query(RecoveryToken).filter_by(user_id=user_id).delete(synchronize_session=False)
+        db.query(Invitation).filter_by(workspace_id=workspace_id).delete(synchronize_session=False)
+        db.query(Session).filter(Session.user_id.in_(member_ids)).delete(synchronize_session=False)
+        db.query(RecoveryToken).filter(
+            RecoveryToken.user_id.in_(member_ids)).delete(synchronize_session=False)
         db.query(RateBucket).filter(RateBucket.key.like(f'%{workspace_id}%')).delete(synchronize_session=False)
-        db.query(RateBucket).filter(RateBucket.key.like(f'%{rate_identity(email)}%')).delete(synchronize_session=False)
-        # Buckets written before RATE_KEY_SECRET was introduced used a plain SHA-256
-        # address digest. Remove that transition format too instead of retaining it until
-        # the next expiry sweep after an account deletion.
-        db.query(RateBucket).filter(RateBucket.key.like(f'%{token_hash(email)}%')).delete(synchronize_session=False)
-        db.query(RateBucket).filter(RateBucket.key.like(f'%{user_id}%')).delete(synchronize_session=False)
-        db.delete(user)
+        for member in members:
+            db.query(RateBucket).filter(
+                RateBucket.key.like(f'%{rate_identity(member.email)}%')).delete(synchronize_session=False)
+            # Buckets written before RATE_KEY_SECRET was introduced used a plain SHA-256
+            # address digest. Remove that transition format too instead of retaining it
+            # until the next expiry sweep after a workspace deletion.
+            db.query(RateBucket).filter(
+                RateBucket.key.like(f'%{token_hash(member.email)}%')).delete(synchronize_session=False)
+            db.query(RateBucket).filter(
+                RateBucket.key.like(f'%{member.id}%')).delete(synchronize_session=False)
+        db.query(User).filter_by(workspace_id=workspace_id).delete(synchronize_session=False)
         db.delete(workspace)
         db.commit()
         response.delete_cookie('trendsell_session', path='/api')
@@ -958,8 +1168,15 @@ def create_app(settings=None):
         history = list(reversed(product_reviews(db,user,product_id)))
         # `current` is the newest record, so a request waiting for a reviewer is still
         # shown as such even while an earlier decision governs the gate (E03).
-        return {'gate': gate, 'current': latest_review(db,user,product_id), 'history': history,
-                'can_review': permissions_granted(user, 'compliance.review'),
+        current = latest_review(db,user,product_id)
+        # This capability is request-specific, not merely role-specific. Owners normally
+        # hold review permission, but the requester must never be invited by the UI to
+        # decide their own review only to be rejected by the write endpoint.
+        can_review = bool(current and current.get('status') == 'requested'
+                          and current.get('requested_by') != user.id
+                          and permissions_granted(user, 'compliance.review'))
+        return {'gate': gate, 'current': current, 'history': history,
+                'can_review': can_review,
                 'review_version': cmp.REVIEW_VERSION}
 
     @app.post('/api/v1/products/{product_id}/compliance/requests', status_code=201)
@@ -1011,6 +1228,8 @@ def create_app(settings=None):
             raise HTTPException(404, 'Record not found in this workspace.')
         if row.payload['status'] != 'requested':
             raise HTTPException(409, 'This review has already been decided. Request a new review instead.')
+        if row.payload.get('requested_by') == user.id:
+            raise HTTPException(403, 'A compliance review must be decided by a different workspace reviewer.')
         sources = [source.model_dump() for source in payload.sources]
         if payload.status == 'approved':
             # The dates are not decoration: an approval has to rest on a publication that

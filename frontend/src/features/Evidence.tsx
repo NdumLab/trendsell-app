@@ -151,7 +151,7 @@ export function CompliancePanel({ product }: { product: Product }) {
         <button className="button primary" onClick={() => setDeciding(true)}>Decide this review<ArrowRight size={15} /></button>}
     </div>
     {!state.data?.can_review && current?.status === 'requested' &&
-      <p className="muted-text">Your workspace role cannot decide a review. It is waiting for someone who can.</p>}
+      <p className="muted-text">You cannot decide this request. It is waiting for a different workspace reviewer.</p>}
 
     <Modal open={requesting} onOpenChange={setRequesting} title="Request an import-readiness review"
       description="Give the reviewer what they need to answer without chasing context.">

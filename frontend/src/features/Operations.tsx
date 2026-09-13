@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, ArrowRight, ArrowUpRight, Bell, BellOff, Check, ChevronDown, Download, ExternalLink, FilePlus2, FileText, FlaskConical, Globe2, LogOut, Plus, RefreshCw, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal, Trash2, Truck } from 'lucide-react';
+import { Activity, ArrowRight, ArrowUpRight, Bell, BellOff, Check, ChevronDown, Download, ExternalLink, FilePlus2, FileText, FlaskConical, Globe2, LogOut, Plus, RefreshCw, Settings as SettingsIcon, ShieldCheck, SlidersHorizontal, Trash2, Truck, UserPlus, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { useWorkspace } from '@/shared/Workspace';
 import { AccountSecurity } from '@/features/Account';
 import { AssessmentSummary, DecisionBadge, Empty, Loading, Modal, Notice, PageTitle, ProductPicker, TruthBadge } from '@/shared/UI';
-import { api, post } from '@/lib/api';
+import { api, del, post } from '@/lib/api';
 import { dateTime, download, formatMoney } from '@/lib/utils';
-import type { Source, Watch } from '@/types';
+import type { Source, User, Watch, WorkspaceInvitation } from '@/types';
 
 export function DataHealth(){
  const w=useWorkspace();const [filter,setFilter]=useState('All sources');
@@ -41,10 +41,31 @@ export function Suppliers(){
    const p={name:select.options[select.selectedIndex]?.text ?? ''};
    if(!p.name)return;setDraft(`${w.demo?'DEMO DRAFT — SYNTHETIC PRODUCT\n\n':''}Subject: Request for quotation — ${p.name}\n\nHello,\n\nPlease provide a written quotation for the following:\n\nProduct: ${p.name}\nQuantity: ${d.get('quantity')} units\nDestination: Nigeria\nSpecifications: ${d.get('specifications')}\n\nPlease include your company details, dated unit price, currency, MOQ, Incoterm, packaging dimensions, sample cost, production lead time, payment terms, and quote validity. Please list any certificates you can supply, with their issuing authority and product reference, for independent review.\n\nNo order is confirmed by this request. We will review specifications, import requirements, and shipping costs before proceeding.\n\nThank you.`);}}><ProductPicker name="product" confirmedOnly/><label>Required quantity<input name="quantity" type="number" min={1} max={1000000} required/></label><label>Required specifications<textarea name="specifications" required maxLength={2000} placeholder="Describe materials, dimensions, packaging, and any requirements you have confirmed."/></label><button className="button secondary" type="submit"><FileText size={15}/>Generate draft</button>{draft&&<><label>Review and edit<textarea className="rfq-text" value={draft} onChange={e=>setDraft(e.target.value)}/></label><button className="button primary" type="button" onClick={()=>download('trendsell-rfq-draft.txt',draft,'text/plain')}><Download size={15}/>Download draft</button><p className="form-caption">Nothing has been sent to a supplier.</p></>}</form></Modal></>;
 }
+
+function WorkspaceMembers(){
+ const w=useWorkspace();const [busy,setBusy]=useState(false);
+ const enabled=!w.demo&&w.user?.role==='owner';
+ const query=useQuery({queryKey:['workspace-members'],queryFn:()=>api<{members:User[];invitations:WorkspaceInvitation[]}>('/workspace/members'),enabled,retry:false});
+ if(!enabled)return null;
+ const refresh=async()=>{await query.refetch();};
+ return <section className="panel settings-card workspace-members-card"><div className="section-heading"><div><h2>Members & review roles</h2><p>Invite a different person to review import readiness.</p></div><Users size={19}/></div>
+  <form className="member-invite-form" onSubmit={async event=>{event.preventDefault();setBusy(true);const form=event.currentTarget;const data=new FormData(form);try{await post('/workspace/invitations',{email:data.get('email'),role:data.get('role')});form.reset();await refresh();toast.success('Invitation sent');}catch(problem){toast.error((problem as Error).message);}finally{setBusy(false);}}}>
+   <label>Email address<input name="email" type="email" required maxLength={254} autoComplete="off" placeholder="reviewer@company.com"/></label>
+   <label>Role<select name="role" defaultValue="reviewer"><option value="reviewer">Reviewer</option><option value="analyst">Analyst</option><option value="viewer">Viewer</option></select></label>
+   <button className="button primary" disabled={busy}><UserPlus size={15}/>{busy?'Sending…':'Invite member'}</button>
+  </form>
+  {query.error&&<Notice kind="amber">Member list is unavailable: {query.error.message}</Notice>}
+  {query.isLoading?<Loading/>:<div className="table-scroll"><table><thead><tr><th>Member</th><th>Role</th><th>Status</th><th/></tr></thead><tbody>
+   {(query.data?.members||[]).map(member=><tr key={member.id}><td>{member.email}<small>{member.name}</small></td><td>{member.role==='owner'?<span>Owner</span>:<select aria-label={`Role for ${member.email}`} value={member.role} onChange={async event=>{try{await post(`/workspace/members/${member.id}/role`,{role:event.target.value});await refresh();toast.success('Member role updated');}catch(problem){toast.error((problem as Error).message);}}}><option value="reviewer">Reviewer</option><option value="analyst">Analyst</option><option value="viewer">Viewer</option></select>}</td><td>{member.email_verified?'Verified':'Verification pending'}</td><td>{member.role!=='owner'&&<button className="icon-button" aria-label={`Remove ${member.email} from workspace`} onClick={async()=>{if(!window.confirm(`Remove ${member.email} from this workspace? Their sessions will end immediately.`))return;try{await del(`/workspace/members/${member.id}`);await refresh();toast.success('Member access removed');}catch(problem){toast.error((problem as Error).message);}}}><Trash2 size={15}/></button>}</td></tr>)}
+   {(query.data?.invitations||[]).map(invitation=><tr key={invitation.id}><td>{invitation.email}<small>Invited {dateTime(invitation.created_at)}</small></td><td>{invitation.role}</td><td>Pending until {dateTime(invitation.expires_at)}</td><td><button className="icon-button" aria-label={`Revoke invitation for ${invitation.email}`} onClick={async()=>{try{await del(`/workspace/invitations/${invitation.id}`);await refresh();toast.success('Invitation revoked');}catch(problem){toast.error((problem as Error).message);}}}><Trash2 size={15}/></button></td></tr>)}
+  </tbody></table></div>}
+ </section>;
+}
+
 export function Settings(){
  const w=useWorkspace();const [busy,setBusy]=useState(false);
  return <><PageTitle eyebrow="YOUR WORKSPACE, YOUR CONTEXT" title="Set yourself up for clearer decisions." description="A focused pilot market, private research, and transparent source coverage."/><div className="settings-grid"><section className="panel settings-card"><div className="section-heading"><h2>Workspace</h2><SettingsIcon size={18}/></div><dl className="metadata"><div><dt>Name</dt><dd>{w.demo?'Demo workspace':w.user?.name||'Not signed in'}</dd></div><div><dt>Mode</dt><dd>{w.demo?'Demo · synthetic examples':'Private evidence workspace'}</dd></div><div><dt>Role</dt><dd>{w.demo?'Demo explorer':w.user?.role||'Guest'}</dd></div><div><dt>Email</dt><dd>{w.user?.email||'—'}</dd></div></dl>{w.user?<button className="button secondary" disabled={busy} onClick={async()=>{setBusy(true);try{await w.signOut();toast.success('Signed out');}catch(e){toast.error((e as Error).message);}finally{setBusy(false);}}}><LogOut size={15}/>Sign out</button>:w.demo?<button className="button secondary" onClick={w.exitDemo}>Exit demo<ArrowRight size={15}/></button>:<button className="button primary" onClick={()=>w.setAuthOpen(true)}>Sign in or create a workspace<ArrowRight size={15}/></button>}</section><section className="panel settings-card"><div className="section-heading"><h2>Market & currency</h2><Globe2 size={18}/></div><dl className="metadata"><div><dt>Destination</dt><dd><span className="nigeria-flag"/> Nigeria</dd></div><div><dt>Sourcing origin</dt><dd>China</dd></div><div><dt>Discovery market</dt><dd>Amazon US</dd></div><div><dt>Decision currency</dt><dd>NGN · user-entered FX</dd></div></dl><p className="muted-text">The pilot supports one corridor. New destinations need maintained local sources, tariff records, and coverage owners.</p></section><section className="panel settings-card"><div className="section-heading"><h2>Evidence & integrations</h2><ShieldCheck size={19}/></div><p>No provider credentials are accepted in the browser. Source connections and effective-dated rules require server-side configuration and review.</p><Link to="/data-health" className="button secondary">Review source health<ArrowUpRight size={15}/></Link></section><section className="panel settings-card"><div className="section-heading"><h2>Explore & export</h2><FlaskConical size={19}/></div><p>Demo examples are stored separately in this browser. Saved workspace decisions retain their inputs and formula versions.</p><div className="stack">{!w.demo&&<button className="button secondary" onClick={()=>void w.enterDemo()}>Explore demo workspace<ArrowUpRight size={15}/></button>}{(w.demo||w.user?.role==='owner')&&<button className="button secondary" onClick={async()=>{try{if(w.demo){download('trendsell-demo-workspace-export.json',JSON.stringify({demo:true,schema:'trendsell-demo-export/1',exported_at:new Date().toISOString(),market:'NG',products:w.products,decisions:w.decisions,quotes:w.quotes,watches:w.watches},null,2));return;}
    // The server export walks every authorised record; the loaded pages are only a view of it (T05).
    const body=await api<Record<string,unknown>>('/export');download(`trendsell-workspace-${new Date().toISOString().slice(0,10)}.json`,JSON.stringify(body,null,2));toast.success('Workspace export downloaded');}catch(e){toast.error((e as Error).message);}}}><Download size={15}/>Export workspace records</button>}</div></section>
- <AccountSecurity/></div></>;
+ <WorkspaceMembers/><AccountSecurity/></div></>;
 }

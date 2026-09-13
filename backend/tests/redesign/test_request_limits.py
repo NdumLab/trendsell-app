@@ -15,7 +15,7 @@ import pytest
 
 from app.db import RateBucket, RecoveryToken, Session
 from app.limits import MAX_BODY_BYTES
-from app.security import keyed_hash, purge_expired, token_hash
+from app.security import keyed_hash, purge_expired, purge_old_audit_events, token_hash
 from conftest import HEADERS, PASSWORD, register
 
 AMAZON = 'https://www.amazon.com/dp/B0ABCDEFGH'
@@ -148,7 +148,8 @@ def test_expired_sessions_credentials_and_finished_windows_are_removed(client, o
         db.add(RateBucket(key='active-window', count=1, expires_at=future))
         db.commit()
         removed = purge_expired(db)
-        assert removed == {'sessions': 1, 'recovery_tokens': 1, 'rate_buckets': 1}
+        assert removed == {'sessions': 1, 'recovery_tokens': 1, 'invitations': 0,
+                           'rate_buckets': 1}
         assert db.get(Session, 'expired-session') is None
         assert db.get(RecoveryToken, 'expired-recovery') is None
         assert db.get(RecoveryToken, 'live-recovery') is not None
@@ -169,6 +170,21 @@ def test_cleanup_never_resets_a_window_that_is_still_counting(client, owner):
         purge_expired(db)
     assert client.post('/api/v1/auth/login', json={'email': 'owner@example.com', 'password': PASSWORD, 'name': 'W'},
                        headers=HEADERS).status_code == 429
+
+
+def test_audit_retention_removes_only_events_older_than_the_policy(client, owner):
+    from app.db import Audit
+
+    moment = datetime.now(timezone.utc)
+    with client.app.state.database.session() as db:
+        db.add(Audit(id='old-audit', workspace_id=owner['workspace_id'], user_id=owner['id'],
+                     action='test.old', created_at=(moment - timedelta(days=366)).isoformat()))
+        db.add(Audit(id='kept-audit', workspace_id=owner['workspace_id'], user_id=owner['id'],
+                     action='test.kept', created_at=(moment - timedelta(days=364)).isoformat()))
+        db.commit()
+        assert purge_old_audit_events(db, 365, now=moment) == 1
+        assert db.get(Audit, 'old-audit') is None
+        assert db.get(Audit, 'kept-audit') is not None
 
 
 def test_a_new_rate_bucket_records_when_its_window_ends(client, owner):

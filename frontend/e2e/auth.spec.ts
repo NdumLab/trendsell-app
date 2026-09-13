@@ -1,4 +1,4 @@
-import { asin, captureAndConfirm, expect, test, PASSWORD, uniqueEmail } from './fixtures';
+import { asin, captureAndConfirm, expect, latestMessage, test, tokenFrom, PASSWORD, uniqueEmail } from './fixtures';
 
 /** Registration, sign-in, sign-out and an expired session (action plan T02). */
 test.describe('account access', () => {
@@ -29,6 +29,37 @@ test.describe('account access', () => {
     await back.getByRole('button', { name: 'Sign in' }).click();
     await expect(back).toBeHidden();
     await expect(page.getByText('Browser workspace').first()).toBeVisible();
+  });
+
+  test('an owner can invite a reviewer who joins through the emailed link', async ({ page, browser, workspace }) => {
+    const email = uniqueEmail();
+    await page.goto('/settings');
+    const members = page.locator('.workspace-members-card');
+    await members.getByLabel('Email address').fill(email);
+    await members.getByLabel('Role').selectOption('reviewer');
+    await members.getByRole('button', { name: 'Invite member' }).click();
+    await expect(members.getByText(email)).toBeVisible();
+
+    const message = await latestMessage('workspace_invitation');
+    expect(message.to).toBe(email);
+    expect(message.body).toContain('/accept-invitation#token=');
+    const token = await tokenFrom('workspace_invitation');
+    const inviteeContext = await browser.newContext({ baseURL: new URL(page.url()).origin });
+    const invitee = await inviteeContext.newPage();
+    await invitee.goto(`/accept-invitation#token=${token}`);
+    await invitee.getByLabel('Your name').fill('Browser reviewer');
+    await invitee.getByLabel('Password').fill(PASSWORD);
+    await invitee.getByRole('button', { name: 'Join workspace' }).click();
+    await expect(invitee).toHaveURL(/\/$/);
+    await expect(invitee.getByText('Browser reviewer').first()).toBeVisible();
+
+    await page.reload();
+    const role = page.getByLabel(`Role for ${email}`);
+    await expect(role).toHaveValue('reviewer');
+    await role.selectOption('viewer');
+    await expect(role).toHaveValue('viewer');
+    expect(workspace.workspace).toBe('E2E workspace');
+    await inviteeContext.close();
   });
 
   test('a wrong password is reported without revealing whether the account exists', async ({ page }) => {

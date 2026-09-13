@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
-from .db import RateBucket, RecoveryToken, Session
+from .db import Audit, Invitation, RateBucket, RecoveryToken, Session
 
 #: Windows in this app are hourly or daily; a day plus a margin outlives all of them.
 DEFAULT_BUCKET_TTL = 26 * 3600
@@ -65,10 +65,28 @@ def purge_expired(db, now=None):
     sessions = db.query(Session).filter(Session.expires_at <= moment).delete(synchronize_session=False)
     recovery_tokens = db.query(RecoveryToken).filter(
         RecoveryToken.expires_at <= moment).delete(synchronize_session=False)
+    invitations = db.query(Invitation).filter(
+        Invitation.expires_at <= moment).delete(synchronize_session=False)
     buckets = db.query(RateBucket).filter(RateBucket.expires_at.isnot(None),
                                           RateBucket.expires_at <= moment).delete(synchronize_session=False)
     db.commit()
-    return {'sessions': sessions, 'recovery_tokens': recovery_tokens, 'rate_buckets': buckets}
+    return {'sessions': sessions, 'recovery_tokens': recovery_tokens,
+            'invitations': invitations, 'rate_buckets': buckets}
+
+
+def purge_old_audit_events(db, retention_days, now=None):
+    """Apply the deployment's bounded audit-retention policy.
+
+    Audit rows contain no payloads or credentials, but their workspace/user ids are still
+    pseudonymous. A configured cutoff turns the policy into behavior instead of leaving it
+    in an operations document. The caller supplies a timezone-aware datetime in tests;
+    production uses the current UTC time.
+    """
+    moment = now or datetime.now(timezone.utc)
+    cutoff = (moment - timedelta(days=retention_days)).isoformat()
+    removed = db.query(Audit).filter(Audit.created_at < cutoff).delete(synchronize_session=False)
+    db.commit()
+    return removed
 
 def resolve_input(value):
     """Parse identifiers only. Never fetch a user-controlled URL or follow redirects."""
