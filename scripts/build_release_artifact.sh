@@ -77,8 +77,18 @@ printf '%s\n' \
     "  \"source_date_epoch\": $source_date_epoch" \
     '}' > "$release_root/RELEASE.json"
 
-# Normalize every timestamp and archive owner. gzip -n suppresses its own filename and
-# timestamp header. Two builds of the same source and toolchain therefore have one digest.
+# Normalize permissions because git-archive extraction and copied build output otherwise inherit
+# the runner's umask. Restore executable bits only where the committed Git mode requires them.
+find "$release_root" -type d -exec chmod 0755 {} +
+find "$release_root" -type f -exec chmod 0644 {} +
+while read -r mode _ _ path; do
+    if [[ "$mode" == 100755 ]]; then
+        chmod 0755 "$release_root/$path"
+    fi
+done < <(git ls-files -s -- "${required_paths[@]}")
+
+# Normalize every timestamp and archive owner. gzip -n suppresses its own filename and timestamp
+# header. Two builds of the same source and toolchain therefore have one digest across umasks.
 find "$release_root" -exec touch -h -d "@$source_date_epoch" {} +
 
 mkdir -p "$output_dir"

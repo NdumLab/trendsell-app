@@ -94,9 +94,11 @@ def test_release_archive_is_clean_tree_only_versioned_and_reproducible(tmp_path)
     first_dir = tmp_path / 'first'
     second_dir = tmp_path / 'second'
 
-    first = run([repository / 'scripts/build_release_artifact.sh', first_dir],
+    first = run(['bash', '-c', 'umask 0002; exec "$0" "$1"',
+                 repository / 'scripts/build_release_artifact.sh', first_dir],
                 cwd=repository, environment=environment)
-    second = run([repository / 'scripts/build_release_artifact.sh', second_dir],
+    second = run(['bash', '-c', 'umask 0077; exec "$0" "$1"',
+                  repository / 'scripts/build_release_artifact.sh', second_dir],
                  cwd=repository, environment=environment)
     assert first.returncode == second.returncode == 0, first.stderr + second.stderr
 
@@ -113,6 +115,9 @@ def test_release_archive_is_clean_tree_only_versioned_and_reproducible(tmp_path)
         names = archive.getnames()
         prefix = f'trendsell-{commit[:12]}'
         manifest = json.load(archive.extractfile(f'{prefix}/RELEASE.json'))
+        assert archive.getmember(f'{prefix}/backend/app/main.py').mode == 0o644
+        assert archive.getmember(f'{prefix}/backend/app').mode == 0o755
+        assert archive.getmember(f'{prefix}/scripts/build_release_artifact.sh').mode == 0o755
     assert manifest['commit'] == commit
     assert manifest['schema'] == 'trendsell-release/1'
     assert f'{prefix}/frontend/dist/index.html' in names
