@@ -67,6 +67,7 @@ def release_fixture(tmp_path):
         'frontend/package.json': '{"scripts":{"build":"fixture"}}\n',
         'frontend/package-lock.json': '{}\n',
         'scripts/backup_postgres.sh': '#!/usr/bin/env bash\n',
+        'scripts/check_backup.sh': '#!/usr/bin/env bash\n',
         'scripts/check_dependency_licenses.py': '#!/usr/bin/env python3\n',
         'scripts/restore_postgres.sh': '#!/usr/bin/env bash\n',
         'scripts/scan_secrets.sh': '#!/usr/bin/env bash\n',
@@ -74,6 +75,7 @@ def release_fixture(tmp_path):
     }
     for relative, body in files.items():
         write(repository / relative, body)
+    (repository / 'scripts/check_backup.sh').chmod(0o755)
     shutil.copy2(BUILD_RELEASE, repository / 'scripts/build_release_artifact.sh')
     commit_all(repository, 'fixture release')
 
@@ -118,6 +120,7 @@ def test_release_archive_is_clean_tree_only_versioned_and_reproducible(tmp_path)
         assert archive.getmember(f'{prefix}/backend/app/main.py').mode == 0o644
         assert archive.getmember(f'{prefix}/backend/app').mode == 0o755
         assert archive.getmember(f'{prefix}/scripts/build_release_artifact.sh').mode == 0o755
+        assert archive.getmember(f'{prefix}/scripts/check_backup.sh').mode == 0o755
     assert manifest['commit'] == commit
     assert manifest['schema'] == 'trendsell-release/1'
     assert f'{prefix}/frontend/dist/index.html' in names

@@ -482,6 +482,9 @@ def create_app(settings=None):
     @app.get('/api/v1/config')
     def config():
         return {'allow_registration':settings.allow_registration, 'destination':'NG', 'demo':False,
+                'release_tier':settings.release_tier,
+                'invitation_only':settings.release_tier == 'controlled_pilot',
+                'billing_enabled':False,
                 'research_daily_limit':settings.research_daily_limit,
                 'mail_delivery_configured':mailer.configured,
                 'audit_retention_days':settings.audit_retention_days}

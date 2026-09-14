@@ -2,6 +2,24 @@ import { asin, captureAndConfirm, expect, latestMessage, test, tokenFrom, PASSWO
 
 /** Registration, sign-in, sign-out and an expired session (action plan T02). */
 test.describe('account access', () => {
+  test('the controlled tier is visibly free and invitation-only', async ({ page }) => {
+    await page.route('**/api/v1/config', async route => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({ response, json: {
+        ...body, release_tier: 'controlled_pilot', invitation_only: true,
+        billing_enabled: false, allow_registration: false,
+      } });
+    });
+    await page.goto('/');
+    await expect(page.getByText('FREE · INVITATION-ONLY PILOT')).toBeVisible();
+
+    await page.getByRole('button', { name: /My workspace/ }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText(/free, invitation-only controlled pilot/i)).toBeVisible();
+    await expect(dialog.getByRole('button', { name: /Create a workspace/ })).toHaveCount(0);
+  });
+
   test('a visitor can create a workspace, sign out and sign back in', async ({ page }) => {
     const email = uniqueEmail();
     await page.goto('/');

@@ -20,6 +20,14 @@ recovery; [permissions, privacy and retention](docs/PRIVACY_AND_PERMISSIONS.md) 
 pilot enforces and stores, and what it does not; [production readiness](docs/PRODUCTION_READINESS.md)
 for the current deployment decision and unresolved owner actions.
 
+## Selected release tier
+
+TrendSell is scoped as a **free, invitation-only controlled pilot**. Production uses
+`RELEASE_TIER=controlled_pilot` with `ALLOW_REGISTRATION=false`; existing workspace owners admit
+the small approved cohort through email-bound, single-use invitations. There is no billing or
+public sign-up in this tier. Selecting this scope does not override the remaining approval and
+operational gates in the [production-readiness checklist](docs/PRODUCTION_READINESS.md).
+
 ---
 
 ## The evidence rule

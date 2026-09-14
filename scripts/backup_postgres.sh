@@ -36,8 +36,8 @@ if [ "$keep" -lt 1 ] || [ "$keep" -gt 3650 ]; then
 fi
 if [ -n "$s3_uri" ]; then
   case "$s3_uri" in
-    s3://?*) ;;
-    *) echo "TRENDSELL_BACKUP_S3_URI must start with s3:// and name a bucket" >&2; exit 2 ;;
+    s3://*/*) ;;
+    *) echo "TRENDSELL_BACKUP_S3_URI must name a bucket and private prefix" >&2; exit 2 ;;
   esac
   case "$s3_sse" in
     AES256|aws:kms) ;;
@@ -87,7 +87,13 @@ find "$dir" -maxdepth 1 -name 'trendsell-*.dump.sha256' -type f -mtime "+$keep" 
 # The database URL and AWS credentials are never passed on the command line or printed.
 if [ -n "$s3_uri" ]; then
   remote="${s3_uri%/}/$(basename "$target")"
-  aws s3 cp "$target" "$remote" --only-show-errors --sse "$s3_sse"
-  aws s3 cp "$target.sha256" "$remote.sha256" --only-show-errors --sse "$s3_sse"
+  # Ask S3 to retain an independently retrievable SHA-256 for each object. The
+  # recurring checker compares these service-side checksums with the local files;
+  # object size and an uploaded checksum sidecar alone cannot detect equal-size
+  # corruption of the remote object.
+  aws s3 cp "$target" "$remote" --only-show-errors --sse "$s3_sse" \
+    --checksum-algorithm SHA256
+  aws s3 cp "$target.sha256" "$remote.sha256" --only-show-errors --sse "$s3_sse" \
+    --checksum-algorithm SHA256
   echo "copied backup and checksum to the configured offsite destination"
 fi

@@ -1,6 +1,6 @@
 # Definitive production readiness checklist
 
-Updated 13 September 2026 on branch `impl/evidence-platform-phase0`.
+Updated 14 September 2026 on branch `impl/evidence-platform-phase0`.
 
 This is TrendSell's release contract for the current architecture: a React static frontend,
 FastAPI service, PostgreSQL database, nginx reverse proxy, systemd-managed application and backup
@@ -8,6 +8,11 @@ jobs, SMTP account mail and, when enabled, external evidence providers. It is in
 than a list of work completed in the repository.
 
 ## Decision now
+
+**Selected scope:** free, invitation-only controlled pilot. Production registration remains closed;
+an existing owner admits only the approved cohort through email-bound invitations. No billing,
+payment, public sign-up or general-availability claim is in scope. This scope decision does not turn
+any blocked readiness gate into a pass.
 
 | Release tier | Decision | Reason |
 | --- | --- | --- |
@@ -62,7 +67,7 @@ paid or otherwise generally available release. Public inherits every Pilot gate.
 
 | ID | Acceptance condition | Required evidence | Pilot | Public | Current |
 | --- | --- | --- | --- | --- | --- |
-| F01 | Registration/intake, sign-in/out, sessions, recovery, verification, invitations, member suspension and workspace deletion behave as the release policy states | PostgreSQL integration and browser results plus target-environment smoke | Required | Required | **BLOCKED** — software passes locally; production recovery/delivery is unproven |
+| F01 | Registration/intake, sign-in/out, sessions, recovery, verification, invitations, member suspension and workspace deletion behave as the release policy states | PostgreSQL integration and browser results plus target-environment smoke | Required | Required | **BLOCKED** — [production smoke](operations/2026-09-14-production-smoke.md) passed sign-in, role denial, SMTP-backed invitation, suspension/reactivation and recovery/session revocation; mailbox-driven token use, email verification and workspace deletion remain unproven |
 | F02 | Every workspace-data read, write, export and audit route enforces tenant and role boundaries; denial leaves the other tenant's state unchanged | Route inventory and shared-database isolation tests on R01 | Required | Required | **PASS** — exact tagged release passes the route inventory and shared-database isolation regressions locally and in remote CI |
 | F03 | Retried and concurrent account, job, review, decision and watch operations converge without duplicate effects, lost updates or unexpected 500s | PostgreSQL contention/idempotency results on R01 | Required | Required | **PASS** — exact tagged release passes the PostgreSQL contention and idempotency cases locally and in remote CI |
 | F04 | Saved decisions, evidence snapshots, formula/threshold versions and exports remain immutable, internally consistent and replayable | Contract, replay and historical-lineage tests on R01 | Required | Required | **PASS** — exact tagged release passes contract, replay and historical-lineage tests locally and in remote CI |
@@ -104,8 +109,8 @@ paid or otherwise generally available release. Public inherits every Pilot gate.
 | ID | Acceptance condition | Required evidence | Pilot | Public | Current |
 | --- | --- | --- | --- | --- | --- |
 | D01 | The owner approves numeric RPO and RTO, backup scope, local/offsite retention and the maximum acceptable data-loss window | Values in the release record and policy approval | Required | Required | **BLOCKED** — not agreed |
-| D02 | Scheduled backups run under a restricted identity, publish checksums, copy to a private encrypted offsite destination, expire under policy and alert on absence/failure | Timer/job status, object/IAM/TLS/encryption/lifecycle evidence and backup-age alert | Required | Required | **BLOCKED** — mechanics ship but are not installed/proven |
-| D03 | A recent production-data copy—or, before first launch, a representative production-scale synthetic/sanitized database—restores into an isolated database within RTO; checksum, schema, record/tenant counts and saved-assessment replay pass; access to restored data is controlled | Dated drill record, timings and verification output | Required | Required | **BLOCKED** — only a small disposable database was drilled |
+| D02 | Scheduled backups run under a restricted identity, publish checksums, copy to a private encrypted offsite destination, expire under policy and alert on absence/failure | Timer/job status, object/IAM/TLS/encryption/lifecycle evidence and backup-age alert | Required | Required | **BLOCKED** — daily local/S3 copies, checksum, AES-256, versioning, lifecycle, anonymous denial, non-delete IAM and a six-hour local/offsite age/integrity check were proven 2026-09-14; a named alert destination, bucket-level TLS/Public Access Block evidence and TrendSell-only IAM scope remain open |
+| D03 | A recent production-data copy—or, before first launch, a representative production-scale synthetic/sanitized database—restores into an isolated database within RTO; checksum, schema, record/tenant counts and saved-assessment replay pass; access to restored data is controlled | Dated drill record, timings and verification output | Required | Required | **BLOCKED** — the 2026-09-14 S3-to-isolated-database production drill passed, but production held only one empty workspace and does not prove representative-scale RTO |
 | D04 | Post-recovery-point deletions and other legally/operationally required changes can be identified and reapplied after restore | Tested deletion-replay procedure and audit evidence | Required | Required | **BLOCKED** |
 | D05 | The previous application artifact runs against the migrated schema for the rollback window, or a tested new-database restore/switch procedure exists; no destructive in-place downgrade is assumed | Staging rollback drill and recorded rollback artifact/database target | Required | Required | **BLOCKED** |
 | D06 | Migration duration, locking, disk requirement, backfill counts and interruption behavior are measured on representative scale; abort/rollback criteria are stated | Staging migration rehearsal and thresholds | Required | Required | **BLOCKED** |
@@ -126,10 +131,10 @@ paid or otherwise generally available release. Public inherits every Pilot gate.
 
 | ID | Acceptance condition | Required evidence | Pilot | Public | Current |
 | --- | --- | --- | --- | --- | --- |
-| A01 | Initial ownership is verified, public registration matches policy, members enter through owner-managed invitations, and removal immediately terminates access | Target-environment intake/revocation smoke and owner record | Required | Required | **BLOCKED** |
-| A02 | Public releases use an approved SMTP provider/sending identity with TLS, SPF, DKIM and DMARC; reset, verification and invitation links work end to end; bounces/failures are monitored | DNS/provider results, disposable-account flows and failure alert | Required unless A03 passes | Required | **BLOCKED** |
+| A01 | Initial ownership is verified, public registration matches policy, members enter through owner-managed invitations, and removal immediately terminates access | Target-environment intake/revocation smoke and owner record | Required | Required | **BLOCKED** — registration is closed and the [production invitation/revocation smoke](operations/2026-09-14-production-smoke.md) passed; the real pilot owner/cohort and mailbox ownership remain unapproved |
+| A02 | Public releases use an approved SMTP provider/sending identity with TLS, SPF, DKIM and DMARC; reset, verification and invitation links work end to end; bounces/failures are monitored | DNS/provider results, disposable-account flows and failure alert | Required unless A03 passes | Required | **BLOCKED** — Resend SMTP, TLS, sending-domain DNS and provider-test-recipient acceptance pass; the send-only API key prevented mailbox-body retrieval, and bounce/failure monitoring has no recipient |
 | A03 | If Pilot omits SMTP, registration remains closed and a named operator uses a tested trusted-channel recovery procedure within a stated support window; every pilot user is told self-service recovery is unavailable | Signed pilot constraint, operator/recovery drill and participant notice | Required if A02 is N/A | Not permitted | **BLOCKED** |
-| A04 | Account/workspace deletion and export are tested in production-like conditions; active data disappears as documented and backup expiry/replay follows the approved policy | Test record, audit events and policy link | Required | Required | **BLOCKED** |
+| A04 | Account/workspace deletion and export are tested in production-like conditions; active data disappears as documented and backup expiry/replay follows the approved policy | Test record, audit events and policy link | Required | Required | **BLOCKED** — production owner export and disposable record cleanup passed; self-service workspace deletion and post-restore deletion replay remain unproven |
 
 ## 8. Data rights, privacy and legal policy
 
@@ -199,7 +204,7 @@ Blank or `TBD` required values are **BLOCKED**, never implied approval.
 
 | Field | Required value |
 | --- | --- |
-| Release tier and approved cohort | |
+| Release tier and approved cohort | Free, invitation-only controlled pilot; exact named cohort remains approval-blocking and is admitted only by owner-issued email invitations |
 | Commit SHA / tag | |
 | Artifact ID and SHA-256 | |
 | Build and remote CI links | |
@@ -253,7 +258,9 @@ and operational gates:
 * Application request logs intentionally retain pseudonymous workspace/user UUIDs for correlation;
   they still require access control and retention. Installed nginx error-log behavior is separate.
 * Account mail transport exists but no provider/sending identity/deliverability monitoring is proven.
-* Scheduled backup/offsite retention and production restore have not been proven.
+* Daily checksummed local/S3 backup and an S3-to-isolated-database production restore are proven,
+  but missed-backup alerting, bucket-level TLS/Public Access Block evidence, formal RPO/RTO and a
+  representative-scale timed restore remain open.
 * Qualified reviewer ownership, on-call/support ownership and final privacy/retention choices are open.
 
 The operational procedure supporting these gates is in [the runbook](RUNBOOK.md). Product sequencing

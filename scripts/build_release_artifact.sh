@@ -44,6 +44,7 @@ required_paths=(
     frontend/package-lock.json
     scripts/backup_postgres.sh
     scripts/build_release_artifact.sh
+    scripts/check_backup.sh
     scripts/check_dependency_licenses.py
     scripts/restore_postgres.sh
     scripts/scan_secrets.sh

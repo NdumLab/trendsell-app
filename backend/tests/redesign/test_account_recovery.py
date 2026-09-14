@@ -325,6 +325,7 @@ def test_the_logging_transport_is_not_mistaken_for_delivery(database_url):
 @pytest.mark.parametrize('transport', ['sink', 'log'])
 def test_diagnostic_mail_transports_are_refused_in_production(monkeypatch, transport):
     monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv('ALLOW_REGISTRATION', 'false')
     monkeypatch.setenv('DATABASE_URL', 'postgresql+psycopg://user:password@db.example/app')
     monkeypatch.setenv('CORS_ORIGINS', 'https://app.example.com')
     monkeypatch.setenv('RATE_KEY_SECRET', 'an-independent-production-rate-key-secret')
@@ -370,6 +371,7 @@ def test_smtp_transport_can_use_implicit_tls_without_starttls(monkeypatch):
 
 def test_production_accepts_a_complete_tls_smtp_configuration(monkeypatch):
     monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv('ALLOW_REGISTRATION', 'false')
     monkeypatch.setenv('DATABASE_URL', 'postgresql+psycopg://user:password@db.example/app')
     monkeypatch.setenv('CORS_ORIGINS', 'https://app.example.com')
     monkeypatch.setenv('RATE_KEY_SECRET', 'an-independent-production-rate-key-secret')
@@ -392,6 +394,7 @@ def test_production_accepts_a_complete_tls_smtp_configuration(monkeypatch):
 def test_incomplete_or_insecure_production_smtp_is_refused(monkeypatch, change, match):
     values = {
         'APP_ENV': 'production',
+        'ALLOW_REGISTRATION': 'false',
         'DATABASE_URL': 'postgresql+psycopg://user:password@db.example/app',
         'CORS_ORIGINS': 'https://app.example.com',
         'RATE_KEY_SECRET': 'an-independent-production-rate-key-secret',
@@ -410,6 +413,7 @@ def test_incomplete_or_insecure_production_smtp_is_refused(monkeypatch, change, 
 
 def test_production_requires_a_non_enumerable_rate_key(monkeypatch):
     monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv('ALLOW_REGISTRATION', 'false')
     monkeypatch.setenv('DATABASE_URL', 'postgresql+psycopg://user:password@db.example/app')
     monkeypatch.setenv('CORS_ORIGINS', 'https://app.example.com')
     monkeypatch.setenv('MAIL_TRANSPORT', '')

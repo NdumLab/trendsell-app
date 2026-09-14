@@ -14,7 +14,7 @@ User=trendsell
 Group=trendsell
 WorkingDirectory=/opt/trendsell/backend
 EnvironmentFile=/etc/trendsell/trendsell.env
-UMask=0027
+UMask=0077
 
 # The application emits one structured, route-template-based request event. Disable
 # Uvicorn's second access line: it contains the raw path/query and client address.
@@ -28,8 +28,29 @@ SyslogIdentifier=trendsell
 
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 ReadOnlyPaths=/opt/trendsell /etc/trendsell
 
 [Install]

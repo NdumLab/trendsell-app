@@ -84,7 +84,7 @@ deployment secret `METRICS_TOKEN`; no workspace role grants service-operator acc
 | Invitations | Expired invitations are removed by the startup sweep. Accepted/revoked invitations remain until their original expiry; the audit trail retains the action under its own policy. |
 | Audit events | Deleted at startup when older than `AUDIT_RETENTION_DAYS` (default 365; production accepts 30–3650). The user-facing notice must state the configured value. |
 | Workspace records | Retained indefinitely. Saved assessments are immutable by design; a new input creates a new assessment. |
-| Backups | `scripts/backup_postgres.sh` prunes local dumps on `TRENDSELL_BACKUP_KEEP` days (default 14), writes a SHA-256 sidecar and can copy both to private S3 with server-side encryption. The timer is **not installed or enabled** and the destination/lifecycle/RPO still need approval; see [the runbook](RUNBOOK.md). |
+| Backups | The daily production timer writes a SHA-256 sidecar, keeps local dumps for 14 days and copies both files to an anonymous-inaccessible S3 prefix with AES-256 server-side encryption, versioning and an approximately 31-day lifecycle expiry. The upload identity cannot delete objects. Formal RPO/RTO approval and backup-age alerting remain open; see [the runbook](RUNBOOK.md). |
 | Application/proxy logs | Host journal and nginx rotation/retention are deployment policy. They are **not yet recorded for production**. |
 
 ## Deletion
@@ -96,10 +96,10 @@ database, then signs the browser out. Active members must be explicitly removed 
 owner cannot silently erase their access and shared data. The screen tells the owner to export
 first.
 
-Backups are not edited in place. Once production backups exist, a deleted record remains in an
-older retained backup until that backup expires under the agreed retention policy. The optional
-S3 path requests server-side encryption, but the bucket, IAM and lifecycle policy remain
-deployment decisions that must be approved before the schedule is enabled. A restore procedure
+Backups are not edited in place. A deleted record remains in a local backup for up to 14 days and
+in the current S3 destination for approximately 31 days, until that object expires under the
+bucket lifecycle. S3 objects request AES-256 server-side encryption, are versioned and cannot be
+deleted by the upload identity. A restore procedure
 must preserve deletion requests made after the restored recovery point before the
 copy can become the live service. The UI describes this distinction and does not promise that
 deletion rewrites historical backups.
@@ -133,9 +133,10 @@ limited per address and per account. Every rejection — expired, spent, wrong p
 never existed — returns the same message. A password reset does not by itself mark the email
 address verified; only redeeming the purpose-bound email-verification credential does that.
 
-Registration defaults closed in production (`ALLOW_REGISTRATION=false`). The initial owner can
-be enrolled in a controlled registration window; after that, owner-managed, email-bound
-invitations add selected pilot members without reopening public registration.
+The selected production tier is a free, invitation-only controlled pilot
+(`RELEASE_TIER=controlled_pilot`, `ALLOW_REGISTRATION=false`). The existing owner uses
+owner-managed, email-bound invitations to add selected pilot members without reopening public
+registration. This release refuses to start if controlled-pilot registration is enabled.
 
 Verification and invitations cannot reach a real inbox until SMTP is configured. The operator
 reset procedure deliberately does not mark the address

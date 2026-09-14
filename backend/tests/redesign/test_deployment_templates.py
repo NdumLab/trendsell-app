@@ -6,12 +6,43 @@ REPOSITORY = Path(__file__).resolve().parents[3]
 NGINX = REPOSITORY / 'deploy/nginx-trendsell.conf.template'
 BACKUP_SERVICE = REPOSITORY / 'deploy/trendsell-backup.service.template'
 BACKUP_TIMER = REPOSITORY / 'deploy/trendsell-backup.timer.template'
+BACKUP_CHECK_SERVICE = REPOSITORY / 'deploy/trendsell-backup-check.service.template'
+BACKUP_CHECK_TIMER = REPOSITORY / 'deploy/trendsell-backup-check.timer.template'
+APPLICATION_SERVICE = REPOSITORY / 'deploy/trendsell.service.template'
 
 
 def test_uvicorn_does_not_emit_a_second_raw_access_log():
-    service = (REPOSITORY / 'deploy/trendsell.service.template').read_text()
+    service = APPLICATION_SERVICE.read_text()
     command = next(line for line in service.splitlines() if line.startswith('ExecStart='))
     assert '--no-access-log' in command
+
+
+def test_application_service_drops_host_privileges_and_kernel_access():
+    service = APPLICATION_SERVICE.read_text()
+    required = (
+        'UMask=0077',
+        'NoNewPrivileges=true',
+        'PrivateTmp=true',
+        'PrivateDevices=true',
+        'ProtectSystem=strict',
+        'ProtectHome=true',
+        'ProtectKernelTunables=true',
+        'ProtectKernelModules=true',
+        'ProtectKernelLogs=true',
+        'ProtectControlGroups=true',
+        'ProtectProc=invisible',
+        'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6',
+        'RestrictNamespaces=true',
+        'RestrictRealtime=true',
+        'RestrictSUIDSGID=true',
+        'LockPersonality=true',
+        'MemoryDenyWriteExecute=true',
+        'CapabilityBoundingSet=',
+        'AmbientCapabilities=',
+        'SystemCallFilter=@system-service',
+    )
+    for directive in required:
+        assert directive in service
 
 
 def test_nginx_access_log_omits_addresses_request_targets_and_client_headers():
@@ -42,11 +73,34 @@ def test_nginx_body_limit_matches_the_application_limit():
 
 def test_backup_schedule_is_a_hardened_explicit_opt_in():
     service = BACKUP_SERVICE.read_text()
+    application_service = APPLICATION_SERVICE.read_text()
     timer = BACKUP_TIMER.read_text()
     assert 'Type=oneshot' in service
     assert 'User=trendsell' in service
     assert 'UMask=0077' in service
     assert 'ProtectSystem=strict' in service
     assert 'ReadWritePaths=/var/backups/trendsell' in service
+    assert 'EnvironmentFile=-/etc/trendsell/backup-s3.env' in service
+    assert 'backup-s3.env' not in application_service
     assert 'OnCalendar=' in timer and 'Persistent=true' in timer
     assert 'WantedBy=timers.target' in timer
+
+
+def test_backup_check_is_scoped_to_the_one_shot_credentials_and_runs_repeatedly():
+    service = BACKUP_CHECK_SERVICE.read_text()
+    timer = BACKUP_CHECK_TIMER.read_text()
+    application_service = APPLICATION_SERVICE.read_text()
+    assert 'User=trendsell' in service
+    assert 'EnvironmentFile=/etc/trendsell/backup-s3.env' in service
+    assert 'ExecStart=/usr/local/sbin/trendsell-backup-check' in service
+    assert 'NoNewPrivileges=true' in service
+    assert 'CapabilityBoundingSet=' in service
+    assert 'backup-s3.env' not in application_service
+    assert 'OnUnitActiveSec=6h' in timer
+    assert 'Persistent=true' in timer
+
+
+def test_production_template_selects_the_invitation_only_pilot():
+    environment = (REPOSITORY / 'deploy/trendsell.env.template').read_text()
+    assert 'RELEASE_TIER=controlled_pilot' in environment
+    assert 'ALLOW_REGISTRATION=false' in environment

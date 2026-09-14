@@ -1,0 +1,36 @@
+[Unit]
+Description=Check TrendSell local and offsite backup freshness and integrity
+After=network-online.target trendsell-backup.service
+Wants=network-online.target
+ConditionPathExists=/etc/trendsell/trendsell.env
+
+[Service]
+Type=oneshot
+User=trendsell
+Group=trendsell
+WorkingDirectory=/opt/trendsell
+Environment=TRENDSELL_BACKUP_DIR=/var/backups/trendsell
+Environment=TRENDSELL_BACKUP_MAX_AGE_HOURS=30
+EnvironmentFile=/etc/trendsell/trendsell.env
+EnvironmentFile=/etc/trendsell/backup-s3.env
+ExecStart=/usr/local/sbin/trendsell-backup-check
+UMask=0077
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+LockPersonality=true

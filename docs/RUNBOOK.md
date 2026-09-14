@@ -244,6 +244,12 @@ approved. Once they are, install and validate them:
     systemctl start trendsell-backup.service
     systemctl status trendsell-backup.service trendsell-backup.timer
 
+Keep AWS credentials out of `/etc/trendsell/trendsell.env`, because that file is also loaded
+by the long-running web service. The backup unit optionally loads root-only
+`/etc/trendsell/backup-s3.env`; put `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_DEFAULT_REGION`, `TRENDSELL_BACKUP_S3_URI` and `TRENDSELL_BACKUP_S3_SSE` there and set
+its mode to `0600`. The system manager reads the file and passes it only to the one-shot.
+
 Confirm the first dump and checksum exist at mode `0600`, `sha256sum --check` passes,
 `pg_restore --list` passes, and both objects reached the approved private off-host prefix.
 Confirm bucket TLS/encryption enforcement, restricted IAM and lifecycle expiry separately;
@@ -255,12 +261,12 @@ Status of the operational parts (action plan P06):
 | Item | State |
 | --- | --- |
 | Backup and restore scripts | Present in `scripts/`. Drill run 2026-09-08 against a disposable PostgreSQL 16.4 instance: two workspaces, 30 records, 6 saved assessments. The restored copy reported the same schema revision, identical per-workspace counts, all 6 assessments replaying to their stored values, and cross-workspace reads still returning 404. The script refused to restore over an existing database and rejected a non-alphanumeric database name. |
-| Restore drill on production data | **Not performed.** Requires production access and a decision by the owner |
-| Scheduled backups, retention, offsite copy | Hardened daily service/timer templates and an encrypted S3 copy path are present but **not installed or enabled**. Their default is 14 local days; the owner still needs to approve the location, bucket/IAM/lifecycle policy, retention and RPO. |
-| Recovery point and recovery time objectives | **Not agreed.** Record them here once decided |
+| Restore drill on production data | **Passed 2026-09-14.** The freshly uploaded S3 dump and checksum were downloaded, SHA-256 and `pg_restore --list` passed, and the dump restored into a separate database. Schema revision `0006_workspace_invitations`, per-workspace counts and record kinds matched the live baseline; the current pilot database contained one workspace and no records/assessments. The disposable database was removed after verification. This proves the path, not representative-scale recovery time. |
+| Scheduled backups, retention, offsite copy | **Active.** `trendsell-backup.timer` runs daily at 02:15 UTC with up to 30 minutes randomized delay. Local dumps retain 14 days. S3 destination is `s3://yerika-siteforge-prod-backups-739951718503-us-east-1/siteforge/trendsell/postgresql/`; objects use AES-256 server-side encryption, are versioned and receive the bucket's approximately 31-day lifecycle expiry. The scoped IAM credential can put/list/get but cannot delete objects, the object is anonymous-inaccessible (HTTP 403), and credentials are loaded only by the one-shot. Bucket-level Public Access Block and explicit TLS-policy reads remain unavailable to this scoped IAM identity. |
+| Recovery point and recovery time objectives | **Not formally agreed.** The installed schedule provides one recovery point per day when healthy (about a 24-hour interval plus randomized delay); the 2026-09-14 empty-pilot recovery path completed in seconds, which is evidence rather than an RTO commitment. |
 
-Do not treat retained customer research as recoverable until the drill has been run against
-a copy of production and the result recorded in this file.
+Do not extrapolate the empty-pilot drill to a populated or representative-scale database;
+repeat and time it once the pilot contains realistic data.
 
 ## Deliberate gaps
 

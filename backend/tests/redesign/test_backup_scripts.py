@@ -1,4 +1,6 @@
 """Backup wrappers publish only verified dumps and preserve restore connection options."""
+import base64
+import hashlib
 import os
 import stat
 import subprocess
@@ -7,6 +9,7 @@ from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[3]
 BACKUP = REPOSITORY / 'scripts/backup_postgres.sh'
+CHECK = REPOSITORY / 'scripts/check_backup.sh'
 RESTORE = REPOSITORY / 'scripts/restore_postgres.sh'
 
 
@@ -97,8 +100,19 @@ printf '%s\n' "$*" >> "$AWS_LOG"
     uploads = calls.read_text().splitlines()
     assert len(uploads) == 2
     assert all('s3://private-backups/trendsell/' in call for call in uploads)
-    assert any('.dump --only-show-errors --sse AES256' in call for call in uploads)
-    assert any('.dump.sha256 --only-show-errors --sse AES256' in call for call in uploads)
+    assert any('.dump --only-show-errors --sse AES256 --checksum-algorithm SHA256' in call
+               for call in uploads)
+    assert any('.dump.sha256 --only-show-errors --sse AES256 --checksum-algorithm SHA256'
+               in call for call in uploads)
+
+
+def test_offsite_destination_requires_a_bucket_prefix(tmp_path):
+    tools = backup_tools(tmp_path)
+    environment = backup_environment(tmp_path, tools)
+    environment['TRENDSELL_BACKUP_S3_URI'] = 's3://private-backups'
+    result = subprocess.run([BACKUP], env=environment, text=True, capture_output=True)
+    assert result.returncode == 2
+    assert 'bucket and private prefix' in result.stderr
 
 
 def test_an_offsite_failure_fails_the_backup_job_but_keeps_local_recovery(tmp_path):
@@ -129,6 +143,69 @@ def test_offsite_failure_does_not_prevent_local_retention(tmp_path):
     assert result.returncode == 9
     assert not old.exists() and not old.with_suffix('.dump.sha256').exists()
     assert len(list(backup_dir.glob('trendsell-*.dump'))) == 1
+
+
+def check_environment(tmp_path, *, remote_dump_checksum=None):
+    tools = tmp_path / 'check-bin'
+    tools.mkdir()
+    executable(tools / 'pg_restore', r'''
+[[ "$1" == "--list" && -s "$2" ]]
+''')
+    backup_dir = tmp_path / 'check-backups'
+    backup_dir.mkdir()
+    dump = backup_dir / 'trendsell-20260914T120000Z-check.dump'
+    dump.write_bytes(b'checked dump')
+    checksum = hashlib.sha256(dump.read_bytes()).hexdigest()
+    sidecar = dump.with_suffix('.dump.sha256')
+    sidecar.write_text(f'{checksum}  {dump.name}\n')
+    dump_checksum = base64.b64encode(hashlib.sha256(dump.read_bytes()).digest()).decode()
+    sidecar_checksum = base64.b64encode(
+        hashlib.sha256(sidecar.read_bytes()).digest()).decode()
+    executable(tools / 'aws', r'''
+printf '%s\n' "$*" >> "$AWS_LOG"
+case "$*" in
+  *".dump.sha256"*)
+    printf '{"ContentLength":%s,"ServerSideEncryption":"AES256","ChecksumSHA256":"%s"}\n' \
+      "$SIDECAR_SIZE" "$REMOTE_SIDECAR_CHECKSUM"
+    ;;
+  *".dump"*)
+    printf '{"ContentLength":%s,"ServerSideEncryption":"AES256","ChecksumSHA256":"%s"}\n' \
+      "$DUMP_SIZE" "$REMOTE_DUMP_CHECKSUM"
+    ;;
+  *) exit 3 ;;
+esac
+''')
+    environment = os.environ.copy()
+    environment.update({
+        'PATH': f'{tools}:{environment["PATH"]}',
+        'TRENDSELL_BACKUP_DIR': str(backup_dir),
+        'TRENDSELL_BACKUP_MAX_AGE_HOURS': '30',
+        'TRENDSELL_BACKUP_S3_URI': 's3://private-backups/trendsell',
+        'TRENDSELL_BACKUP_S3_SSE': 'AES256',
+        'AWS_LOG': str(tmp_path / 'check-aws.log'),
+        'DUMP_SIZE': str(dump.stat().st_size),
+        'SIDECAR_SIZE': str(sidecar.stat().st_size),
+        'REMOTE_DUMP_CHECKSUM': remote_dump_checksum or dump_checksum,
+        'REMOTE_SIDECAR_CHECKSUM': sidecar_checksum,
+    })
+    return environment
+
+
+def test_backup_check_proves_local_and_s3_checksums_sizes_and_encryption(tmp_path):
+    environment = check_environment(tmp_path)
+    result = subprocess.run([CHECK], env=environment, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert 'PASS newest local and encrypted offsite TrendSell backup agree' in result.stdout
+    calls = Path(environment['AWS_LOG']).read_text().splitlines()
+    assert len(calls) == 2
+    assert all('--checksum-mode ENABLED' in call for call in calls)
+
+
+def test_backup_check_rejects_an_equal_size_remote_object_with_wrong_checksum(tmp_path):
+    environment = check_environment(tmp_path, remote_dump_checksum='not-the-local-checksum')
+    result = subprocess.run([CHECK], env=environment, text=True, capture_output=True)
+    assert result.returncode == 1
+    assert 'SHA-256 does not match the local backup' in result.stderr
 
 
 def test_restore_preserves_connection_query_options(tmp_path):

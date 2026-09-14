@@ -1,5 +1,16 @@
 export type Truth = 'Observed' | 'Calculated' | 'Estimated' | 'User input' | 'Unavailable' | 'Demo';
 export type Decision = 'GO' | 'WATCH' | 'NO-GO' | 'INSUFFICIENT EVIDENCE';
+export interface PublicConfig {
+  allow_registration: boolean;
+  release_tier: 'development' | 'controlled_pilot';
+  invitation_only: boolean;
+  billing_enabled: boolean;
+  destination: string;
+  demo: boolean;
+  research_daily_limit: number;
+  mail_delivery_configured: boolean;
+  audit_retention_days: number;
+}
 /** One dated record about a product. Today every one is entered by a person and carries
  *  truth state 'User input'; a connected collector would produce 'Observed' (E06). */
 export interface Observation {
