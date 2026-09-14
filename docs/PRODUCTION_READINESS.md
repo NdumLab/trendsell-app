@@ -202,6 +202,8 @@ The release owner completes these in order. Deployment stops immediately on any 
 
 Blank or `TBD` required values are **BLOCKED**, never implied approval.
 
+Candidate-specific preparation: [`150d118` release approval record](releases/2026-09-14-150d118-approval.md).
+
 | Field | Required value |
 | --- | --- |
 | Release tier and approved cohort | Free, invitation-only controlled pilot; exact named cohort remains approval-blocking and is admitted only by owner-issued email invitations |
