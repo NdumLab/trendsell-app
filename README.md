@@ -47,38 +47,47 @@ Consequences that are enforced, not aspirational:
 
 - No production route returns invented revenue, ROAS, view counts, competitor strength or trend scores.
 - A refresh with no new observation produces no score change.
-- A failed collector lowers confidence; it never reads as falling demand.
+- A failed collector is recorded as unavailable/degraded; it never becomes a zero value or falling demand.
 - Missing chart points stay as gaps and are never interpolated.
 - `GO` requires compliance resolved **by a reviewer** and confidence ≥ 70, regardless of how good the margin looks.
 - Confidence is an evidence-coverage score, not a probability, and every component of it is shown.
 - Evidence you type is user input: it counts, but it is capped below the confidence a `GO` needs.
-  Only a connected, authorised collector could raise it further, and none is connected.
+  Only a connected, authorised collector can raise it further. The Amazon Creators API adapter is
+  implemented, but remains disabled unless Amazon explicitly approves this internal research use
+  and durable evidence retention; standard Associates cache permissions are insufficient.
 
 ## What is in the pilot
 
 | Area | State |
 | --- | --- |
-| Product X-Ray | Amazon US URL or ASIN → identifier capture, research job, user confirmation |
-| Evidence ledger | Record dated evidence yourself — metric, market, source, method, author. Stored as **User input**, never as an observation. No collector is connected |
-| Evidence coverage | A versioned, explainable score (`evidence-quality/1.0.0`) with a component-by-component breakdown. Self-reported evidence is capped below the confidence a GO needs |
+| Product X-Ray | Amazon US URL or ASIN → identifier capture and research job. With authorised Amazon Creators API configuration, GetItems resolves current identity and only returned catalog fields; otherwise user confirmation remains available and clearly labelled |
+| Evidence ledger | Record dated evidence yourself — metric, market, source, method, author. Stored as **User input**, never as an observation. Authorised catalog responses are stored separately as **Observed**, with collection time, source market, snapshot, parser/collector versions and usage-rights label |
+| Sales drivers | Product-level advertising, creator, search and marketplace evidence. Signals are presented as association, never causal attribution; absent spend, ROAS, revenue, seller count and sales history stay unavailable |
+| Evidence coverage | A versioned, explainable score (`evidence-quality/1.1.0`) with a component-by-component breakdown. Self-reported evidence is capped below the confidence a GO needs |
 | Import readiness | Request a review, and a workspace reviewer approves, rejects or asks for more. An approval cites its official sources and expires. A dropdown cannot clear this gate |
-| Decision Room | Editable unit economics, three scenarios, cost waterfall, sensitivity, saved assessments. Coverage, confidence and compliance come from the server, not the browser |
+| Decision Room | Editable unit economics, three scenarios, cost waterfall, sensitivity, saved assessments. A dated supplier quote can populate MOQ/cost and is snapshotted with explicit non-USD conversion. Coverage, confidence and compliance come from the server, not the browser |
 | Watchlist | Saved watches and materiality thresholds. Scheduled collection and delivery are **not** enabled, and the screen says so |
-| Suppliers | User-recorded quotes and RFQ drafts; nothing is sent on your behalf |
+| Suppliers | User-recorded quotes preserving original amount, currency, MOQ, terms, date, source and author; RFQ drafts are not sent on your behalf |
 | Data Health | Every source, its status, rights, freshness target and reason for being unavailable |
 | Market Gaps | Corridor view that reports insufficient evidence rather than an untapped opportunity |
 
-Not implemented, and not implied anywhere in the interface: live collectors, scheduled
-monitoring, alert delivery, billing, evidence-file attachments, and image, video or keyword
+Not enabled in the current deployment, and not implied where unavailable: authorised live
+catalog access, scheduled monitoring, alert delivery, billing, evidence-file attachments,
+and image, video or keyword
 capture. Password reset/change, session management, email verification, owner-managed team
 invitations and member removal have browser screens. The release includes a TLS-enforced SMTP
 transport, but a deployment still needs an approved provider, sending identity, DNS
 authentication and delivery monitoring before those messages can reach real inboxes. See
 [permissions, privacy and retention](docs/PRIVACY_AND_PERMISSIONS.md).
 
-Image, video and keyword capture, live collectors, alerts and Creative DNA are later phases.
+Image, video and keyword capture, scheduled collection, alerts and Creative DNA are later phases.
 Follow [docs/ACTION_PLAN.md](docs/ACTION_PLAN.md) for implementation order.
 `TrendSell_Complete_Redesign_Plan-1.docx` remains the broader product-vision reference.
+
+Workspace export schema `trendsell-workspace-export/3` includes catalog source snapshots,
+workspace-scoped source health, original-currency quotes, and quote snapshots/conversions on
+saved decisions. Older saved assessments remain immutable under their stored formula,
+threshold, and evidence versions.
 
 ## Architecture
 

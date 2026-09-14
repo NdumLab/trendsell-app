@@ -1,5 +1,5 @@
 {
-  "method_version": "evidence-quality/1.0.0",
+  "method_version": "evidence-quality/1.1.0",
   "evaluated_at": "2026-09-08T12:00:00+00:00",
   "note": "Shared evidence-quality contract. backend/tests/redesign/test_evidence_contract.py and frontend/src/lib/evidence.contract.test.ts must both reproduce every case exactly. The browser only runs this method for the demo; a real workspace reads the reading from the server.",
   "cases": [
@@ -13,7 +13,7 @@
         "compliance_resolved": false,
         "overall": 0,
         "observation_ids": [],
-        "method_version": "evidence-quality/1.0.0",
+        "method_version": "evidence-quality/1.1.0",
         "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
         "components": [
           {
@@ -76,7 +76,7 @@
         "observation_ids": [
           "a"
         ],
-        "method_version": "evidence-quality/1.0.0",
+        "method_version": "evidence-quality/1.1.0",
         "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
         "components": [
           {
@@ -149,7 +149,7 @@
           "a",
           "b"
         ],
-        "method_version": "evidence-quality/1.0.0",
+        "method_version": "evidence-quality/1.1.0",
         "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
         "components": [
           {
@@ -254,7 +254,7 @@
           "d",
           "e"
         ],
-        "method_version": "evidence-quality/1.0.0",
+        "method_version": "evidence-quality/1.1.0",
         "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
         "components": [
           {
@@ -348,7 +348,7 @@
           "c",
           "d"
         ],
-        "method_version": "evidence-quality/1.0.0",
+        "method_version": "evidence-quality/1.1.0",
         "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
         "components": [
           {
@@ -452,7 +452,7 @@
           "d",
           "e"
         ],
-        "method_version": "evidence-quality/1.0.0",
+        "method_version": "evidence-quality/1.1.0",
         "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
         "components": [
           {
@@ -518,7 +518,7 @@
         "compliance_resolved": false,
         "overall": 0,
         "observation_ids": [],
-        "method_version": "evidence-quality/1.0.0",
+        "method_version": "evidence-quality/1.1.0",
         "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
         "components": [
           {
@@ -592,7 +592,7 @@
           "a",
           "b"
         ],
-        "method_version": "evidence-quality/1.0.0",
+        "method_version": "evidence-quality/1.1.0",
         "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
         "components": [
           {
@@ -653,7 +653,7 @@
         "observation_ids": [
           "a"
         ],
-        "method_version": "evidence-quality/1.0.0",
+        "method_version": "evidence-quality/1.1.0",
         "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
         "components": [
           {
@@ -738,7 +738,7 @@
           "b",
           "c"
         ],
-        "method_version": "evidence-quality/1.0.0",
+        "method_version": "evidence-quality/1.1.0",
         "score_meaning": "Evidence coverage for this product and market. Not a probability of success.",
         "components": [
           {

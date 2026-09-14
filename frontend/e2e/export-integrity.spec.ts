@@ -78,7 +78,7 @@ test.describe('export integrity', () => {
     expect(downloaded.body.assessment.observation_ids).toEqual([]);
     expect(downloaded.body.threshold_version).toBe(downloaded.body.assessment.threshold_version);
     expect(downloaded.body.formula_version).toBe(downloaded.body.assessment.formula_version);
-    expect(downloaded.body.evidence_version).toBe('evidence-quality/1.0.0');
+    expect(downloaded.body.evidence_version).toBe('evidence-quality/1.1.0');
     expect(workspace.workspace).toBe('E2E workspace');
   });
 

@@ -99,7 +99,7 @@ def test_evidence_and_timeline_report_unavailable_rather_than_empty_success(clie
         assert body['reason']
 
 
-def test_data_health_reports_every_source_as_unconfigured(client):
+def test_data_health_reports_every_source_as_unconfigured(client, owner):
     body = client.get('/api/v1/data-health').json()
     assert body['coverage'] is None
     assert body['sources']

@@ -11,7 +11,7 @@ import type { ComplianceGate, ComplianceReview, EvidenceQuality, Observation, Pr
  *  (action plan E06, N02, N03). Both are the answers to blockers the app used to state
  *  without offering any way to resolve them. */
 
-const METRICS = ['Search interest', 'Review velocity', 'Marketplace rank', 'Social mentions',
+const METRICS = ['Advertising activity', 'Creator activity', 'Search interest', 'Review velocity', 'Marketplace rank', 'Marketplace price', 'Social mentions',
   'Local listing price', 'Local listing count', 'Local seller count', 'Local demand signal', 'Other'];
 const MARKETS = [['NG', 'Nigeria (destination)'], ['US', 'United States (discovery)'], ['CN', 'China (supply)'], ['GLOBAL', 'Global']] as const;
 
@@ -50,11 +50,36 @@ export function EvidenceQualityPanel({ quality }: { quality: EvidenceQuality }) 
     {quality.capped_at !== null && quality.raw_points > quality.capped_at &&
       <Notice kind="amber">The components add up to {quality.raw_points}, but every record here was entered
         by a person, so the score is held at {quality.capped_at}. Only a connected, authorised collector can
-        raise it further — and none is connected.</Notice>}
+        raise it further — and none has supplied a current record for this product.</Notice>}
     {quality.limitations.length > 0 && <div className="limitations">
       <h4>What this score does not tell you</h4>
       {quality.limitations.map(limitation => <p key={limitation}><Info size={13} />{limitation}</p>)}
     </div>}
+  </section>;
+}
+
+const DRIVER_GROUPS = [
+  { name: 'Advertising', metrics: ['Advertising activity'], missing: 'No dated ad-library or campaign observation. Record a public ad reference or an authorised campaign export; spend and ROAS remain unavailable unless that source supplies them.' },
+  { name: 'Creators', metrics: ['Creator activity', 'Social mentions'], missing: 'No dated creator observation. Record a post URL and the metric visible at that date; a viral post does not prove sales.' },
+  { name: 'Search', metrics: ['Search interest'], missing: 'No dated search-demand observation. Record an approved search export with market, time window, and method.' },
+  { name: 'Marketplace', metrics: ['Marketplace rank', 'Marketplace price', 'Review velocity'], missing: 'No current marketplace signal. Run an authorised catalog check or record a dated listing observation; absent data is not zero demand.' },
+] as const;
+
+/** Product-level sales-driver evidence. Signals can be associated with demand; none is
+ * presented as causal attribution or converted into revenue, spend, or ROAS. */
+export function SalesDriverEvidence({ records, onInspect }:
+  { records: Observation[]; onInspect: (observation: Observation) => void }) {
+  const sectionTruth = records.length && records.every(record => record.truth_state === records[0].truth_state)
+    ? records[0].truth_state : null;
+  return <section className="panel sales-drivers">
+    <div className="section-heading"><div><h2>Signals associated with demand</h2><p>Advertising, creator, search, and marketplace evidence for this product.</p></div>{sectionTruth?<TruthBadge truth={sectionTruth}/>:records.length?<span className="status-label">Mixed provenance</span>:<TruthBadge truth="Unavailable"/>}</div>
+    <Notice kind="muted"><strong>Association is not attribution.</strong> These signals can help explain why a product deserves investigation. They do not prove which ad, creator, search, or app caused a sale.</Notice>
+    <div className="sales-driver-grid">{DRIVER_GROUPS.map(group => {
+      const matches = records.filter(record => (group.metrics as readonly string[]).includes(record.metric));
+      const latest = matches.at(-1);
+      return <article className="driver-card" key={group.name}><div><h3>{group.name}</h3><TruthBadge truth={latest?.truth_state ?? 'Unavailable'} /></div>{latest ? <><button className="text-button driver-reading" onClick={() => onInspect(latest)}>{latest.metric}: {latest.value == null ? 'Recorded without a numeric value' : `${latest.value} ${latest.unit}`}<ArrowRight size={14} /></button><p>{latest.source_name || latest.source} · {latest.market} · {latest.observed_at.slice(0, 10)}</p>{matches.length > 1 && <small>{matches.length} dated records; no change is calculated here without comparable observations.</small>}</> : <p>{group.missing}</p>}</article>;
+    })}</div>
+    <p className="formula-caption">TrendSell does not invent competitor revenue, advertising spend, ROAS, or app-level sales attribution.</p>
   </section>;
 }
 

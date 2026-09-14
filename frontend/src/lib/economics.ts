@@ -11,7 +11,7 @@ import { ceilUnits, div, money, mul, parse } from '@/lib/money';
  *  `unit-economics/1.1.0` is the current version: identical formulas, evaluated with the
  *  shared scaled-integer arithmetic in `money.ts` so the browser and the API agree exactly. */
 export const FORMULA_VERSION = 'unit-economics/1.1.0';
-export const THRESHOLD_VERSION = 'decision-gates/1.1.0';
+export const THRESHOLD_VERSION = 'decision-gates/1.2.0';
 
 export interface EvidenceGate { confidence: number; coverage: boolean; compliance_resolved: boolean; overall: number | null; observation_ids: string[]; compliance_status?: string }
 export const NO_EVIDENCE: EvidenceGate = { confidence: 0, coverage: false, compliance_resolved: false, overall: null, observation_ids: [], compliance_status: 'none' };
@@ -70,7 +70,7 @@ export const REJECTED_BLOCKER = 'A reviewer rejected this product for import. Do
 export const PROHIBITED_BLOCKER = 'The product is marked prohibited. Do not proceed.';
 
 /** The advisory blockers. Identical in both threshold versions. */
-function blockersFor(scenarios: ScenarioRow[], evidence: EvidenceGate): string[] {
+function blockersV1_1_0(scenarios: ScenarioRow[], evidence: EvidenceGate): string[] {
   const base = scenarios[1], downside = scenarios[0], blockers: string[] = [];
   if (!evidence.coverage) blockers.push('Collect independent demand signals and destination-market evidence.');
   if (!evidence.compliance_resolved) blockers.push('Obtain a reviewed product classification and current import requirements.');
@@ -94,7 +94,7 @@ type GateRule = (scenarios: ScenarioRow[], i: Inputs, evidence: EvidenceGate) =>
 /** The gates the pilot shipped: only the user's own dropdown can force NO-GO. Frozen, so
  *  an assessment saved under it replays to the values it was saved with. */
 const gatesV1_0_0: GateRule = (scenarios, i, evidence) => {
-  const blockers = blockersFor(scenarios, evidence);
+  const blockers = blockersV1_1_0(scenarios, evidence);
   if (i.compliance==='prohibited') return { decision:'NO-GO', blockers:[PROHIBITED_BLOCKER, ...blockers] };
   return { decision: decide(scenarios, evidence, blockers), blockers };
 };
@@ -103,7 +103,16 @@ const gatesV1_0_0: GateRule = (scenarios, i, evidence) => {
  *  missing `compliance_status` means no reviewer has rejected this, which reproduces
  *  1.0.0 exactly. */
 const gatesV1_1_0: GateRule = (scenarios, i, evidence) => {
-  const blockers = blockersFor(scenarios, evidence);
+  const blockers = blockersV1_1_0(scenarios, evidence);
+  if (evidence.compliance_status==='rejected') return { decision:'NO-GO', blockers:[REJECTED_BLOCKER, ...blockers] };
+  if (i.compliance==='prohibited') return { decision:'NO-GO', blockers:[PROHIBITED_BLOCKER, ...blockers] };
+  return { decision: decide(scenarios, evidence, blockers), blockers };
+};
+
+const gatesV1_2_0: GateRule = (scenarios, i, evidence) => {
+  const blockers = blockersV1_1_0(scenarios, evidence).map(blocker => blocker
+    .replace('base contribution margin', 'base net margin after allocated launch costs')
+    .replace('downside contribution margin', 'downside net margin after allocated launch costs'));
   if (evidence.compliance_status==='rejected') return { decision:'NO-GO', blockers:[REJECTED_BLOCKER, ...blockers] };
   if (i.compliance==='prohibited') return { decision:'NO-GO', blockers:[PROHIBITED_BLOCKER, ...blockers] };
   return { decision: decide(scenarios, evidence, blockers), blockers };
@@ -112,6 +121,7 @@ const gatesV1_1_0: GateRule = (scenarios, i, evidence) => {
 const GATE_RULES: Record<string, GateRule> = {
   'decision-gates/1.0.0': gatesV1_0_0,
   'decision-gates/1.1.0': gatesV1_1_0,
+  'decision-gates/1.2.0': gatesV1_2_0,
 };
 
 /** The decision gates for `thresholdVersion`. */
@@ -142,9 +152,9 @@ export interface EconomicsSummary { base_margin_pct: number; downside_margin_pct
 export function economicsSummary(scenarios: ScenarioRow[]): EconomicsSummary {
   const base = scenarios[1], downside = scenarios[0], failures: string[] = [];
   if (base.contribution <= 0) failures.push('The unit does not cover its own costs under these assumptions.');
-  if (base.margin_pct < 15) failures.push('Base contribution margin is below the 15% floor.');
-  else if (base.margin_pct < 25) failures.push('Base contribution margin is below the 25% target.');
-  if (downside.margin_pct < 10) failures.push('Downside contribution margin is below 10%.');
+  if (base.margin_pct < 15) failures.push('Base net margin after allocated launch costs is below the 15% floor.');
+  else if (base.margin_pct < 25) failures.push('Base net margin after allocated launch costs is below the 25% target.');
+  if (downside.margin_pct < 10) failures.push('Downside net margin after allocated launch costs is below 10%.');
   return { base_margin_pct: base.margin_pct, downside_margin_pct: downside.margin_pct, contribution: base.contribution,
     break_even_units: base.break_even_units, viable: !failures.length, failures, threshold_version: THRESHOLD_VERSION };
 }
@@ -152,7 +162,7 @@ export function economicsSummary(scenarios: ScenarioRow[]): EconomicsSummary {
 export type NumericKey = Exclude<keyof Inputs,'compliance'|'channel'|'shipping'>;
 const SENSITIVITY_KEYS: NumericKey[] = ['unit_cost_usd','fx_ngn','freight_ngn','duty_pct','import_tax_pct','selling_price_ngn','channel_fee_pct','returns_pct','marketing_ngn','fixed_cost_ngn','quantity'];
 export interface Swing { key: NumericKey; low: number; high: number; swing: number }
-/** Ranks inputs by how far a ±variation% change moves the base contribution margin. Scenarios, not forecasts. */
+/** Ranks inputs by how far a ±variation% change moves net margin after allocations. Scenarios, not forecasts. */
 export function sensitivity(i: Inputs, variation = 10): Swing[] {
   const shift=(key:NumericKey,factor:number)=>{const value=i[key]*factor;return {...i,[key]:key==='quantity'?Math.max(1,Math.round(value)):value};};
   return SENSITIVITY_KEYS.map(key=>{

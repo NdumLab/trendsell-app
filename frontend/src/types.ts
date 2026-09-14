@@ -11,8 +11,8 @@ export interface PublicConfig {
   mail_delivery_configured: boolean;
   audit_retention_days: number;
 }
-/** One dated record about a product. Today every one is entered by a person and carries
- *  truth state 'User input'; a connected collector would produce 'Observed' (E06). */
+/** One dated record about a product. Manual records are 'User input'; records from a
+ *  connected, authorised collector are 'Observed' (E06). */
 export interface Observation {
   id: string; metric: string; value: number | null; unit: string; source?: string; source_url: string;
   source_name?: string; method?: string; notes?: string; input_author?: string; recorded_at?: string;
@@ -88,10 +88,14 @@ export interface Assessment {
   observation_ids: string[]; evidence?: Observation[]; blockers: string[]; scenarios: Scenario[];
   inputs: Inputs; input_truth_state: Truth;
   evidence_quality?: EvidenceQuality; compliance?: ComplianceGate; compliance_review_id?: string | null;
+  quote_id?: string | null; supplier_quote?: Quote | null;
+  quote_conversion?: { source_currency: string; rate_to_usd: number; effective_unit_cost_usd: number; truth_state: Truth } | null;
   economics?: { base_margin_pct: number; downside_margin_pct: number; contribution: number; break_even_units: number | null; viable: boolean; failures: string[]; threshold_version: string };
 }
 export interface Watch { id: string; product_id: string; product_name?: string | null; product_decision?: Decision; latest_assessment?: LatestAssessment | null; threshold_pct: number; status: string; scheduled: boolean; created_at: string }
-export interface Quote { id: string; product_id: string; product_name?: string | null; supplier: string; source_url: string; unit_price_usd: number; moq: number; lead_days: number; quote_date: string; incoterm: string; notes: string; truth_state: Truth; verification: string }
+export interface Quote { id: string; product_id: string; product_name?: string | null; supplier: string; source_url: string;
+  unit_price?: number; unit_price_usd?: number; currency: string; moq: number; lead_days: number; quote_date: string; incoterm: string;
+  notes: string; truth_state: Truth; verification: string; input_author?: string; recorded_at?: string }
 
 /** One sign-in session on this account. `id` is a one-way handle, never a token. */
 export interface AccountSession {

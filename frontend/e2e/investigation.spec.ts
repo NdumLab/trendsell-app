@@ -45,7 +45,7 @@ test.describe('a complete manual investigation', () => {
     await form.getByRole('combobox', { name: 'Product' }).selectOption({ label: name });
     await form.getByLabel('Supplier name').fill('Example Manufacturing Ltd');
     await form.getByLabel('Supplier or quote source URL').fill('https://supplier.example.com/quote-4821');
-    await form.getByLabel('Unit price (USD)').fill('8.40');
+    await form.getByLabel('Unit price', { exact: true }).fill('8.40');
     await form.getByLabel('Minimum order (units)').fill('300');
     await form.getByLabel('Lead time (days)').fill('25');
     await form.getByLabel('Quote date').fill('2026-09-01');
@@ -70,7 +70,7 @@ test.describe('a complete manual investigation', () => {
     await form.getByLabel('Supplier name').fill('Example Manufacturing Ltd');
     // The browser's own url validation would block "https://", so use a shape it accepts.
     await form.getByLabel('Supplier or quote source URL').fill('https://localhost');
-    await form.getByLabel('Unit price (USD)').fill('8.40');
+    await form.getByLabel('Unit price', { exact: true }).fill('8.40');
     await form.getByLabel('Minimum order (units)').fill('300');
     await form.getByLabel('Lead time (days)').fill('25');
     await form.getByLabel('Quote date').fill('2026-09-01');

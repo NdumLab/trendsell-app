@@ -5,7 +5,7 @@ import { THRESHOLD_VERSION } from '@/lib/economics';
 import { stored } from '@/lib/utils';
 import type { Assessment, Product, Quote, User, Watch } from '@/types';
 
-type QuoteDraft = Omit<Quote,'id'|'truth_state'|'verification'>;
+type QuoteDraft = Omit<Quote,'id'|'truth_state'|'verification'|'input_author'|'recorded_at'>;
 /** Every list endpoint returns its page plus the total that matched, so a screen can say
  *  how much it is not showing instead of implying the page is everything (action plan T05). */
 interface Page { total: number; limit: number; next_cursor: string | null }
@@ -24,7 +24,7 @@ interface Store {
   signOut: ()=>Promise<void>;
   addDemoProduct: (p: Product)=>void; confirm: (id:string,name:string)=>Promise<Product>;
   watch: (id:string,threshold?:number)=>Promise<void>; unwatch: (id:string)=>Promise<void>;
-  saveDecision: (result:Assessment, product:Product, requestKey:string)=>Promise<Assessment>;
+  saveDecision: (result:Assessment, product:Product, requestKey:string, quoteId?:string, quoteFxToUsd?:number)=>Promise<Assessment>;
   saveQuote: (quote:QuoteDraft)=>Promise<void>;
 }
 const Context=createContext<Store>(null!);
@@ -184,9 +184,9 @@ export function WorkspaceProvider({children}:{children:React.ReactNode}) {
     unwatch:async id=>{if(demo)setDemoWatches(prev=>prev.filter(w=>w.id!==id));else{await api(`/watchlists/default/items/${id}`,{method:'DELETE'});await refresh();}},
     // requestKey identifies one logical submission, not one attempt: the caller keeps it
     // across retries so an ambiguous timeout cannot save the assessment twice (T06).
-    saveDecision:async(result,product,requestKey)=>{
+    saveDecision:async(result,product,requestKey,quoteId,quoteFxToUsd)=>{
       if(demo){const saved={...result,id:requestKey,product_id:product.id,product_name:product.name,product_asin:product.asin,evidence:product.observations,evidence_version:'demo-fixture/1',threshold_version:THRESHOLD_VERSION,truth_state:'Demo' as const,created_at:new Date().toISOString()};setDemoDecisions(prev=>[saved,...prev.filter(d=>d.id!==requestKey)]);return saved;}
-      const saved=await post<Assessment>('/decisions',{product_id:product.id,inputs:result.inputs},requestKey);await refresh();return saved;
+      const saved=await post<Assessment>('/decisions',{product_id:product.id,inputs:result.inputs,quote_id:quoteId,quote_fx_to_usd:quoteFxToUsd},requestKey);await refresh();return saved;
     },
     saveQuote:async quote=>{if(demo)setDemoQuotes(prev=>[{...quote,id:crypto.randomUUID(),truth_state:'Demo',verification:'Unverified'},...prev]);else{await post('/quotes',quote);await refresh();}},
   };

@@ -643,5 +643,5 @@ def test_a_saved_assessment_records_the_thresholds_that_decided_it(client, confi
                 headers=HEADERS)
     body = client.post('/api/v1/decisions', json={'product_id': confirmed, 'inputs': INPUTS},
                        headers={**HEADERS, 'Idempotency-Key': 'r04d'}).json()
-    assert body['threshold_version'] == 'decision-gates/1.1.0'
+    assert body['threshold_version'] == 'decision-gates/1.2.0'
     assert body['evidence_quality']['compliance_status'] == 'rejected'

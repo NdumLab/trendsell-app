@@ -1,10 +1,10 @@
-"""Manual evidence and the evidence-quality method (action plan E06, E07, D03).
+"""Evidence records and the evidence-quality method (action plan E06, E07, D03).
 
-No collector is connected. Until one is, the only way a product can carry dated evidence
-is for a person to record it — and the product must be honest about what that is:
+Evidence can be entered by a person or produced by an authorised collector, and the
+product must be honest about which kind each record is:
 
 * a typed number is **User input**, never **Observed**. Only a connected, authorised
-  collector produces an observation, and none exists yet;
+  collector produces an observed record;
 * a manual record still carries everything an observation carries — metric, value, unit,
   market, when it was observed, where it came from, who entered it — because that is what
   makes it inspectable later;
@@ -21,17 +21,19 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-METHOD_VERSION = 'evidence-quality/1.0.0'
+METHOD_VERSION = 'evidence-quality/1.1.0'
 
-#: What a person may record. A collector would produce 'Observed'; nothing does yet.
+#: What a person may record. An authorised collector produces 'Observed'.
 MANUAL_TRUTH_STATE = 'User input'
 COLLECTED_TRUTH_STATES = {'Observed', 'Demo'}
 
 #: Metrics the method understands. Anything else is stored and shown but scores nothing,
 #: because the method cannot say what it would mean.
-DEMAND_METRICS = {'Search interest', 'Review velocity', 'Marketplace rank', 'Social mentions'}
+DEMAND_METRICS = {'Advertising activity', 'Creator activity', 'Search interest',
+                  'Review velocity', 'Marketplace rank', 'Social mentions'}
 LOCAL_METRICS = {'Local listing price', 'Local listing count', 'Local seller count', 'Local demand signal'}
-METRICS = sorted(DEMAND_METRICS | LOCAL_METRICS | {'Other'})
+CONTEXT_METRICS = {'Marketplace price'}
+METRICS = sorted(DEMAND_METRICS | LOCAL_METRICS | CONTEXT_METRICS | {'Other'})
 
 WINDOW_DAYS = 90
 FRESH_DAYS = 30

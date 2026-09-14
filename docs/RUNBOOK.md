@@ -268,11 +268,58 @@ Status of the operational parts (action plan P06):
 Do not extrapolate the empty-pilot drill to a populated or representative-scale database;
 repeat and time it once the pilot contains realistic data.
 
+## Optional Amazon Creators API connection
+
+The server contains a GetItems adapter; it is off by default. **Do not enable it under the
+standard Associates terms alone.** Amazon's published guidance describes Creators API apps
+as applications that refer sales to Amazon and gives cached Offers and BrowseNodeInfo a
+one-hour TTL and other product content a one-day TTL. TrendSell is an internal research tool
+that preserves historical evidence, so its use and durable snapshots require explicit terms
+from Amazon covering both purposes. A locally written policy or a value in
+`AMAZON_CREATORS_USAGE_RIGHTS` is not provider approval.
+
+Only after that approval exists, the operator also needs an Amazon Associates account with
+final acceptance and Creators API access, a credential issued to the primary account owner,
+and a valid US partner tag. Record a reference to the specific provider approval and the
+approved snapshot purpose/retention wording in `AMAZON_CREATORS_USAGE_RIGHTS`.
+
+Install the credential directly into `/etc/trendsell/trendsell.env` using the established
+root-owned secret process—never in chat, Git, `VITE_*`, browser storage, a support ticket, or
+a command whose output is captured. Configure:
+
+```text
+AMAZON_CREATORS_ENABLED=true
+AMAZON_CREATORS_CREDENTIAL_ID=...
+AMAZON_CREATORS_CREDENTIAL_SECRET=...
+AMAZON_CREATORS_CREDENTIAL_VERSION=3.1
+AMAZON_CREATORS_PARTNER_TAG=...
+AMAZON_CREATORS_MARKETPLACE=www.amazon.com
+AMAZON_CREATORS_USAGE_RIGHTS=reviewed purpose and retention policy
+```
+
+Credential version 3.1 uses the North America Login with Amazon token endpoint; use 3.2
+or 3.3 only for credentials issued with those versions. A configured source remains
+`configured` until a workspace requests a product check. Success changes that workspace's
+status to `connected`; authorization, throttling, response, or network failures change it
+to `degraded` with a safe retry reason. A failure does not add a zero observation.
+
+The pilot accepts only `www.amazon.com`; supporting another locale also requires widening
+the product-input and evidence-market contracts so its records are not mislabeled as US.
+GetItems may supply current identity, images, featured offer and sales-rank fields. It does
+not establish sales history, review velocity, seller count, revenue, ad spend, ROAS, or
+causal attribution; the adapter does not infer them. A rank change requires at least two
+separate dated observations. Validate account terms before retaining real snapshots, run a
+single supported-ASIN check, inspect Data Health and the evidence drawer, and then run the
+workspace export/restore check. Enabling the source is a production configuration change
+and follows the normal preflight, backup and rollback process.
+
 ## Deliberate gaps
 
 These are known and tracked, not oversights:
 
-* No scheduled collection runs, so no backup covers collector state — there is none yet.
+* No scheduled collection runs. User-requested Amazon catalog snapshots and source status are
+  workspace records and therefore enter the normal database backup, but a watch does not trigger
+  refresh or notification.
 * The SMTP transport ships, but delivery remains unconfigured (`MAIL_TRANSPORT=`) until a
   provider and sending identity are approved. With no transport the recovery endpoint mints
   no token and sends nothing; `delivery_configured: false` says no mail is coming. **A

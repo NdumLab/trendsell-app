@@ -98,7 +98,7 @@ test('the oldest product is quotable even though it is not on the loaded page', 
   await picker.selectOption({ label: 'Oldest investigation' });
   await page.getByLabel('Supplier name').fill('Disposable supplier');
   await page.getByLabel('Supplier or quote source URL').fill('https://example.test/quote');
-  await page.getByLabel('Unit price (USD)').fill('8.4');
+  await page.getByLabel('Unit price', { exact: true }).fill('8.4');
   await page.getByLabel('Minimum order (units)').fill('100');
   await page.getByLabel('Lead time (days)').fill('30');
   await page.getByLabel('Quote date').fill('2026-09-01');

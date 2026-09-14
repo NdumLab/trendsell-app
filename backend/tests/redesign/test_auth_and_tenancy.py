@@ -21,7 +21,7 @@ def test_session_cookie_is_httponly_and_scoped_to_the_api(client):
 
 
 def test_reads_require_a_session(client):
-    for path in ['/api/v1/auth/me', '/api/v1/products', '/api/v1/decisions', '/api/v1/quotes', '/api/v1/watchlists/default/items', '/api/v1/alerts']:
+    for path in ['/api/v1/auth/me', '/api/v1/products', '/api/v1/decisions', '/api/v1/quotes', '/api/v1/watchlists/default/items', '/api/v1/alerts', '/api/v1/data-health']:
         assert client.get(path).status_code == 401, path
 
 

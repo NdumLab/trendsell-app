@@ -77,6 +77,10 @@ def test_saving_twice_with_one_key_returns_the_same_assessment(client, confirmed
     first, second = save(client, confirmed).json(), save(client, confirmed).json()
     assert first['id'] == second['id']
     assert len(client.get('/api/v1/decisions').json()['decisions']) == 1
+    changed_quote_assumption = client.post('/api/v1/decisions', json={
+        'product_id': confirmed, 'inputs': INPUTS, 'quote_fx_to_usd': 1},
+        headers={**HEADERS, 'Idempotency-Key': 'decision-1'})
+    assert changed_quote_assumption.status_code == 409
 
 
 def test_a_reused_key_with_different_inputs_is_refused(client, confirmed):
@@ -111,6 +115,73 @@ def test_a_quote_is_stored_as_unverified_user_input(client, confirmed):
     assert quote['truth_state'] == 'User input'
     assert quote['verification'] == 'Unverified'
     assert quote['input_author']
+    assert quote['unit_price'] == 8.4
+    assert quote['currency'] == 'USD'
+    assert quote['recorded_at']
+
+
+def test_a_non_usd_quote_preserves_its_original_amount_and_currency(client, confirmed):
+    quote = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Shenzhen Example Ltd',
+        'source_url': 'https://example.com/cny-quote', 'unit_price': 61.5, 'currency': 'CNY',
+        'moq': 240, 'lead_days': 18, 'quote_date': '2026-09-01', 'incoterm': 'EXW'}).json()
+    assert quote['unit_price'] == 61.5
+    assert quote['currency'] == 'CNY'
+    assert 'unit_price_usd' not in quote
+
+
+def test_a_dated_quote_feeds_and_is_snapshotted_in_a_reproducible_decision(client, confirmed):
+    quote = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Shenzhen Example Ltd',
+        'source_url': 'https://example.com/cny-quote', 'unit_price': 61.5, 'currency': 'CNY',
+        'moq': 240, 'lead_days': 18, 'quote_date': '2026-09-01', 'incoterm': 'FOB'}).json()
+    inputs = {**INPUTS, 'quantity': 240, 'unit_cost_usd': 8.61}
+    saved = client.post('/api/v1/decisions', headers={**HEADERS, 'Idempotency-Key': 'quoted'}, json={
+        'product_id': confirmed, 'inputs': inputs, 'quote_id': quote['id'],
+        'quote_fx_to_usd': 0.14}).json()
+    assert saved['inputs'] == inputs
+    assert saved['quote_id'] == quote['id']
+    assert saved['supplier_quote']['unit_price'] == 61.5
+    assert saved['supplier_quote']['currency'] == 'CNY'
+    assert saved['supplier_quote']['quote_date'] == '2026-09-01'
+    assert saved['supplier_quote']['source_url'] == 'https://example.com/cny-quote'
+    assert saved['quote_conversion'] == {
+        'source_currency': 'CNY', 'rate_to_usd': 0.14,
+        'effective_unit_cost_usd': 8.61, 'truth_state': 'User input'}
+
+    retry = client.post('/api/v1/decisions', headers={**HEADERS, 'Idempotency-Key': 'quoted'}, json={
+        'product_id': confirmed, 'inputs': inputs, 'quote_id': quote['id'],
+        'quote_fx_to_usd': 0.14}).json()
+    assert retry['id'] == saved['id']
+    changed_rate = client.post('/api/v1/decisions', headers={**HEADERS, 'Idempotency-Key': 'quoted'}, json={
+        'product_id': confirmed, 'inputs': inputs, 'quote_id': quote['id'],
+        'quote_fx_to_usd': 0.14001})
+    assert changed_rate.status_code == 409
+
+
+def test_a_decision_cannot_misstate_the_selected_quote_conversion(client, confirmed):
+    quote = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Shenzhen Example Ltd',
+        'source_url': 'https://example.com/cny-quote', 'unit_price': 61.5, 'currency': 'CNY',
+        'moq': 240, 'lead_days': 18, 'quote_date': '2026-09-01'}).json()
+    missing = client.post('/api/v1/decisions', headers={**HEADERS, 'Idempotency-Key': 'missing-fx'}, json={
+        'product_id': confirmed, 'inputs': INPUTS, 'quote_id': quote['id']})
+    mismatched = client.post('/api/v1/decisions', headers={**HEADERS, 'Idempotency-Key': 'bad-fx'}, json={
+        'product_id': confirmed, 'inputs': INPUTS, 'quote_id': quote['id'], 'quote_fx_to_usd': 0.14})
+    assert missing.status_code == 422
+    assert 'CNY to USD rate' in missing.json()['detail']
+    assert mismatched.status_code == 422
+    assert 'must match' in mismatched.json()['detail']
+
+    usd_quote = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'USD Example Ltd',
+        'source_url': 'https://example.com/usd-quote', 'unit_price': 8.4, 'currency': 'USD',
+        'moq': 300, 'lead_days': 18, 'quote_date': '2026-09-01'}).json()
+    unnecessary = client.post('/api/v1/decisions', headers={**HEADERS, 'Idempotency-Key': 'usd-fx'}, json={
+        'product_id': confirmed, 'inputs': INPUTS, 'quote_id': usd_quote['id'],
+        'quote_fx_to_usd': 0.14})
+    assert unnecessary.status_code == 422
+    assert 'conversion rate of 1' in unnecessary.json()['detail']
 
 
 def test_a_quote_needs_an_https_source_and_a_real_date(client, confirmed):

@@ -1,6 +1,6 @@
 {
   "formula_version": "unit-economics/1.1.0",
-  "threshold_version": "decision-gates/1.1.0",
+  "threshold_version": "decision-gates/1.2.0",
   "currency": "NGN",
   "arithmetic": "scaled integers at 12 decimal places; see backend/app/money.py and frontend/src/lib/money.ts",
   "rounding": "half away from zero; money and percentages quantised to 2 decimal places",
@@ -514,8 +514,8 @@
           "obs-2"
         ],
         "blockers": [
-          "Raise base contribution margin to at least 25%.",
-          "Keep downside contribution margin at or above 10%."
+          "Raise base net margin after allocated launch costs to at least 25%.",
+          "Keep downside net margin after allocated launch costs at or above 10%."
         ],
         "scenarios": [
           {
@@ -635,7 +635,7 @@
         ],
         "blockers": [
           "The product is marked prohibited. Do not proceed.",
-          "Keep downside contribution margin at or above 10%."
+          "Keep downside net margin after allocated launch costs at or above 10%."
         ],
         "scenarios": [
           {
@@ -754,8 +754,8 @@
         "blockers": [
           "Obtain a reviewed product classification and current import requirements.",
           "Raise evidence confidence to at least 70 before committing inventory.",
-          "Raise base contribution margin to at least 25%.",
-          "Keep downside contribution margin at or above 10%."
+          "Raise base net margin after allocated launch costs to at least 25%.",
+          "Keep downside net margin after allocated launch costs at or above 10%."
         ],
         "scenarios": [
           {
@@ -986,8 +986,8 @@
           "Collect independent demand signals and destination-market evidence.",
           "Obtain a reviewed product classification and current import requirements.",
           "Raise evidence confidence to at least 70 before committing inventory.",
-          "Raise base contribution margin to at least 25%.",
-          "Keep downside contribution margin at or above 10%."
+          "Raise base net margin after allocated launch costs to at least 25%.",
+          "Keep downside net margin after allocated launch costs at or above 10%."
         ],
         "scenarios": [
           {
@@ -1218,8 +1218,8 @@
           "Collect independent demand signals and destination-market evidence.",
           "Obtain a reviewed product classification and current import requirements.",
           "Raise evidence confidence to at least 70 before committing inventory.",
-          "Raise base contribution margin to at least 25%.",
-          "Keep downside contribution margin at or above 10%."
+          "Raise base net margin after allocated launch costs to at least 25%.",
+          "Keep downside net margin after allocated launch costs at or above 10%."
         ],
         "scenarios": [
           {
@@ -1335,8 +1335,8 @@
           "Collect independent demand signals and destination-market evidence.",
           "Obtain a reviewed product classification and current import requirements.",
           "Raise evidence confidence to at least 70 before committing inventory.",
-          "Raise base contribution margin to at least 25%.",
-          "Keep downside contribution margin at or above 10%."
+          "Raise base net margin after allocated launch costs to at least 25%.",
+          "Keep downside net margin after allocated launch costs at or above 10%."
         ],
         "scenarios": [
           {
@@ -1572,7 +1572,7 @@
           "obs-2"
         ],
         "blockers": [
-          "Raise base contribution margin to at least 25%."
+          "Raise base net margin after allocated launch costs to at least 25%."
         ],
         "scenarios": [
           {

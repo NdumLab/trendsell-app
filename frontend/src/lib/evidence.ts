@@ -9,10 +9,10 @@ import type { ComplianceGate, ComplianceReview, EvidenceQuality, Observation } f
  *
  *  `contracts/evidence_cases.json` holds the two implementations together. */
 
-export const METHOD_VERSION = 'evidence-quality/1.0.0';
+export const METHOD_VERSION = 'evidence-quality/1.1.0';
 export const MANUAL_TRUTH_STATE = 'User input';
 export const COLLECTED_TRUTH_STATES = new Set(['Observed', 'Demo']);
-export const DEMAND_METRICS = new Set(['Search interest', 'Review velocity', 'Marketplace rank', 'Social mentions']);
+export const DEMAND_METRICS = new Set(['Advertising activity', 'Creator activity', 'Search interest', 'Review velocity', 'Marketplace rank', 'Social mentions']);
 export const LOCAL_METRICS = new Set(['Local listing price', 'Local listing count', 'Local seller count', 'Local demand signal']);
 export const WINDOW_DAYS = 90;
 export const FRESH_DAYS = 30;

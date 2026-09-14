@@ -58,6 +58,16 @@ class Settings:
     #: into a bulk sender, and one recipient cannot be flooded by several workspaces.
     invitation_workspace_hourly_limit: int = 20
     invitation_email_daily_limit: int = 3
+    #: Amazon Creators API is an explicit server-side opt-in. Credentials are never sent
+    #: to the browser or written to source-health/job records.
+    amazon_creators_enabled: bool = False
+    amazon_creators_credential_id: str = ''
+    amazon_creators_credential_secret: str = ''
+    amazon_creators_credential_version: str = '3.1'
+    amazon_creators_partner_tag: str = ''
+    amazon_creators_marketplace: str = 'www.amazon.com'
+    amazon_creators_usage_rights: str = ''
+    amazon_creators_timeout_seconds: float = 12.0
 
     @classmethod
     def from_env(cls):
@@ -151,6 +161,20 @@ class Settings:
                                or (env == 'production' and not public_app_url.startswith('https://'))):
             raise ValueError('PUBLIC_APP_URL must be an HTTPS origin in production')
 
+        amazon_enabled = enabled('AMAZON_CREATORS_ENABLED', 'false')
+        amazon_version = os.getenv('AMAZON_CREATORS_CREDENTIAL_VERSION', '3.1').strip()
+        if amazon_version not in {'3.1', '3.2', '3.3'}:
+            raise ValueError('AMAZON_CREATORS_CREDENTIAL_VERSION must be 3.1, 3.2, or 3.3')
+        amazon_marketplace = os.getenv('AMAZON_CREATORS_MARKETPLACE', 'www.amazon.com').strip().lower()
+        # The product-input contract and evidence market currently support Amazon US
+        # only. Do not accept a valid-looking foreign locale and then label its evidence
+        # as US; add the locale mapping and identifier contract before widening this.
+        if amazon_marketplace != 'www.amazon.com':
+            raise ValueError('AMAZON_CREATORS_MARKETPLACE must be www.amazon.com for this pilot')
+        amazon_timeout = float(os.getenv('AMAZON_CREATORS_TIMEOUT_SECONDS', '12'))
+        if amazon_timeout < 1 or amazon_timeout > 60:
+            raise ValueError('AMAZON_CREATORS_TIMEOUT_SECONDS must be between 1 and 60')
+
         return cls(
             environment=env, release_tier=release_tier, database_url=url, origins=origins,
             allow_registration=allow_registration,
@@ -166,4 +190,12 @@ class Settings:
             smtp_password=smtp_password, mail_from=mail_from, smtp_starttls=smtp_starttls,
             smtp_ssl=smtp_ssl, public_app_url=public_app_url,
             invitation_workspace_hourly_limit=hourly('INVITATION_WORKSPACE_HOURLY_LIMIT', 20),
-            invitation_email_daily_limit=hourly('INVITATION_EMAIL_DAILY_LIMIT', 3))
+            invitation_email_daily_limit=hourly('INVITATION_EMAIL_DAILY_LIMIT', 3),
+            amazon_creators_enabled=amazon_enabled,
+            amazon_creators_credential_id=os.getenv('AMAZON_CREATORS_CREDENTIAL_ID', ''),
+            amazon_creators_credential_secret=os.getenv('AMAZON_CREATORS_CREDENTIAL_SECRET', ''),
+            amazon_creators_credential_version=amazon_version,
+            amazon_creators_partner_tag=os.getenv('AMAZON_CREATORS_PARTNER_TAG', '').strip(),
+            amazon_creators_marketplace=amazon_marketplace,
+            amazon_creators_usage_rights=os.getenv('AMAZON_CREATORS_USAGE_RIGHTS', '').strip(),
+            amazon_creators_timeout_seconds=amazon_timeout)

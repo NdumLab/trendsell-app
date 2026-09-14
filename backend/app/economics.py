@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import money as m
 
 FORMULA_VERSION = 'unit-economics/1.1.0'
-THRESHOLD_VERSION = 'decision-gates/1.1.0'
+THRESHOLD_VERSION = 'decision-gates/1.2.0'
 
 
 class Inputs(BaseModel):
@@ -132,8 +132,8 @@ REJECTED_BLOCKER = 'A reviewer rejected this product for import. Do not proceed.
 PROHIBITED_BLOCKER = 'The product is marked prohibited. Do not proceed.'
 
 
-def _blockers(scenarios, inputs, evidence):
-    """The advisory blockers. Identical in both threshold versions."""
+def _blockers_v1_1_0(scenarios, inputs, evidence):
+    """The original labels, retained so saved 1.0/1.1 decisions replay exactly."""
     base, downside = scenarios[1], scenarios[0]
     blockers = []
     if not evidence['coverage']: blockers.append('Collect independent demand signals and destination-market evidence.')
@@ -142,6 +142,18 @@ def _blockers(scenarios, inputs, evidence):
     if base['margin_pct'] < 25: blockers.append('Raise base contribution margin to at least 25%.')
     if downside['margin_pct'] < 10: blockers.append('Keep downside contribution margin at or above 10%.')
     return blockers
+
+
+def _blockers_v1_2_0(scenarios, inputs, evidence):
+    """The same thresholds with financially accurate user-facing terminology.
+
+    `margin_pct` deducts allocated marketing and fixed costs, so it is a net batch
+    margin under the entered assumptions—not contribution margin in the usual sense.
+    """
+    blockers = _blockers_v1_1_0(scenarios, inputs, evidence)
+    return [blocker.replace('base contribution margin', 'base net margin after allocated launch costs')
+            .replace('downside contribution margin', 'downside net margin after allocated launch costs')
+            for blocker in blockers]
 
 
 def _decide(scenarios, evidence, blockers):
@@ -162,7 +174,7 @@ def _gates_v1_0_0(scenarios, inputs, evidence):
     Frozen. Assessments saved under this version replay to the values they were saved
     with, including the ones review finding R04 identifies as wrong.
     """
-    blockers = _blockers(scenarios, inputs, evidence)
+    blockers = _blockers_v1_1_0(scenarios, inputs, evidence)
     if inputs.compliance == 'prohibited':
         return 'NO-GO', [PROHIBITED_BLOCKER] + blockers
     return _decide(scenarios, evidence, blockers), blockers
@@ -180,7 +192,17 @@ def _gates_v1_1_0(scenarios, inputs, evidence):
     server. It is absent from assessments saved before this version, and a missing value
     means "no reviewer has rejected this", which reproduces 1.0.0 exactly.
     """
-    blockers = _blockers(scenarios, inputs, evidence)
+    blockers = _blockers_v1_1_0(scenarios, inputs, evidence)
+    if evidence.get('compliance_status') == 'rejected':
+        return 'NO-GO', [REJECTED_BLOCKER] + blockers
+    if inputs.compliance == 'prohibited':
+        return 'NO-GO', [PROHIBITED_BLOCKER] + blockers
+    return _decide(scenarios, evidence, blockers), blockers
+
+
+def _gates_v1_2_0(scenarios, inputs, evidence):
+    """The 1.1 gates with corrected financial labels; numeric thresholds are unchanged."""
+    blockers = _blockers_v1_2_0(scenarios, inputs, evidence)
     if evidence.get('compliance_status') == 'rejected':
         return 'NO-GO', [REJECTED_BLOCKER] + blockers
     if inputs.compliance == 'prohibited':
@@ -191,6 +213,7 @@ def _gates_v1_1_0(scenarios, inputs, evidence):
 GATE_RULES = {
     'decision-gates/1.0.0': _gates_v1_0_0,
     'decision-gates/1.1.0': _gates_v1_1_0,
+    'decision-gates/1.2.0': _gates_v1_2_0,
 }
 
 
@@ -215,11 +238,11 @@ def economics_summary(scenarios):
     if base['contribution'] <= 0:
         failures.append('The unit does not cover its own costs under these assumptions.')
     if base['margin_pct'] < 15:
-        failures.append('Base contribution margin is below the 15% floor.')
+        failures.append('Base net margin after allocated launch costs is below the 15% floor.')
     elif base['margin_pct'] < 25:
-        failures.append('Base contribution margin is below the 25% target.')
+        failures.append('Base net margin after allocated launch costs is below the 25% target.')
     if downside['margin_pct'] < 10:
-        failures.append('Downside contribution margin is below 10%.')
+        failures.append('Downside net margin after allocated launch costs is below 10%.')
     return {'base_margin_pct': base['margin_pct'], 'downside_margin_pct': downside['margin_pct'],
             'contribution': base['contribution'], 'break_even_units': base['break_even_units'],
             'viable': not failures, 'failures': failures, 'threshold_version': THRESHOLD_VERSION}
