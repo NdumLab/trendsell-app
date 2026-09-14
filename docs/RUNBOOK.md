@@ -3,6 +3,9 @@
 Covers schema management, release, rollback and recovery for the pilot installation.
 Written against the work in [the action plan](ACTION_PLAN.md) item P01; the backup and
 restore sections are P06 and are marked where they are not yet demonstrated in production.
+Incident, breach and data-request response is defined separately in the
+[draft incident and data-request runbook](INCIDENT_AND_DATA_REQUEST_RUNBOOK.md); its pending
+contacts, approvals and tabletop remain release blockers.
 
 Nothing here authorises a deployment. It describes how a deployment is performed once
 someone with the authority to do so decides to.

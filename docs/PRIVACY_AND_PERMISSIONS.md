@@ -145,6 +145,10 @@ control of that address.
 
 ## Before a real pilot
 
+The [incident, breach and data-request runbook](INCIDENT_AND_DATA_REQUEST_RUNBOOK.md) is a
+draft procedure only. Its blank owner/contact fields, approval and tabletop must be completed;
+the document is not evidence that S11 or P07 has passed.
+
 These must be settled with the product owner, not by engineering alone:
 
 1. A privacy notice that matches this file, given to pilot users before they enter data.
