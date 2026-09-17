@@ -46,8 +46,20 @@ required_paths=(
     scripts/build_release_artifact.sh
     scripts/check_backup.sh
     scripts/check_dependency_licenses.py
+    scripts/check_postgres_privileges.py
+    scripts/check_recovery_state.sh
+    scripts/configure_postgres_roles.sh
+    scripts/configure_postgres_roles.sql
+    scripts/deploy_release.sh
+    scripts/monitor_trendsell.py
+    scripts/release_manager.py
+    scripts/rollback_postgres_roles.sh
+    scripts/rollback_postgres_roles.sql
     scripts/restore_postgres.sh
+    scripts/replay_deletions.py
     scripts/scan_secrets.sh
+    scripts/sync_deletion_register.sh
+    scripts/verify_deletion_register.py
     scripts/verify_restore.py
 )
 

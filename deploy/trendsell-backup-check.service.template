@@ -8,12 +8,12 @@ ConditionPathExists=/etc/trendsell/trendsell.env
 Type=oneshot
 User=trendsell
 Group=trendsell
-WorkingDirectory=/opt/trendsell
+WorkingDirectory=/opt/trendsell/current
 Environment=TRENDSELL_BACKUP_DIR=/var/backups/trendsell
 Environment=TRENDSELL_BACKUP_MAX_AGE_HOURS=30
 EnvironmentFile=/etc/trendsell/trendsell.env
 EnvironmentFile=/etc/trendsell/backup-s3.env
-ExecStart=/usr/local/sbin/trendsell-backup-check
+ExecStart=/opt/trendsell/current/scripts/check_backup.sh
 UMask=0077
 
 NoNewPrivileges=true

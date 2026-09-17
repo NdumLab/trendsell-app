@@ -59,6 +59,25 @@ jobs:
         env:
           TEST_POSTGRES_URL: postgresql+psycopg://trendsell:trendsell-ci@localhost:5432/trendsell_test
         run: python -m pytest tests/redesign -q
+      - name: Exercise separate migration and runtime database roles
+        env:
+          TRENDSELL_ADMIN_URL: postgresql://trendsell:trendsell-ci@localhost:5432/trendsell_test
+          TRENDSELL_DATABASE_NAME: trendsell_test
+          TRENDSELL_RUNTIME_ROLE: trendsell_runtime_ci
+          TRENDSELL_MIGRATION_ROLE: trendsell_migration_ci
+          TRENDSELL_APPLY_ROLE_GRANTS: 'yes'
+          TRENDSELL_RUNTIME_DATABASE_URL: postgresql+psycopg://trendsell_runtime_ci:runtime-ci@localhost:5432/trendsell_test
+          TRENDSELL_MIGRATION_DATABASE_URL: postgresql+psycopg://trendsell_migration_ci:migration-ci@localhost:5432/trendsell_test
+          TRENDSELL_ALLOW_NON_TLS_DATABASE_TEST: 'yes'
+        run: |
+          psql "$TRENDSELL_ADMIN_URL" --no-psqlrc --set=ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE trendsell_runtime_ci LOGIN PASSWORD 'runtime-ci' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+          CREATE ROLE trendsell_migration_ci LOGIN PASSWORD 'migration-ci' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+          SQL
+          scripts/configure_postgres_roles.sh
+          (cd backend && python -m app.migrate upgrade --url "$TRENDSELL_MIGRATION_DATABASE_URL")
+          scripts/configure_postgres_roles.sh
+          python scripts/check_postgres_privileges.py
 
   frontend:
     name: Frontend type-check, tests and build

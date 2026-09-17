@@ -13,14 +13,14 @@ ConditionPathExists=/etc/trendsell/trendsell.env
 Type=oneshot
 User=trendsell
 Group=trendsell
-WorkingDirectory=/opt/trendsell
+WorkingDirectory=/opt/trendsell/current
 Environment=TRENDSELL_BACKUP_DIR=/var/backups/trendsell
 Environment=TRENDSELL_BACKUP_KEEP=14
 EnvironmentFile=/etc/trendsell/trendsell.env
 # Keep storage credentials out of the web process. This root-readable file is loaded only
 # by the backup one-shot; the leading dash keeps local-only development installations valid.
 EnvironmentFile=-/etc/trendsell/backup-s3.env
-ExecStart=/opt/trendsell/scripts/backup_postgres.sh
+ExecStart=/opt/trendsell/current/scripts/backup_postgres.sh
 UMask=0077
 
 NoNewPrivileges=true

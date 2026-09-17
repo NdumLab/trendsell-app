@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { Empty, Modal, Notice, TruthBadge } from '@/shared/UI';
 import { api, post } from '@/lib/api';
 import { dateTime } from '@/lib/utils';
-import type { ComplianceGate, ComplianceReview, EvidenceQuality, Observation, Product } from '@/types';
+import type { ComplianceGate, ComplianceReview, EvidenceQuality, Observation, Product, PublicConfig } from '@/types';
 
 /** Recording evidence and requesting or deciding an import-readiness review
  *  (action plan E06, N02, N03). Both are the answers to blockers the app used to state
@@ -132,13 +132,34 @@ export function RecordEvidence({ product, open, onOpenChange }:
  *  how to decide one. An analyst cannot decide their own request. */
 export function CompliancePanel({ product }: { product: Product }) {
   const client = useQueryClient();
-  const state = useCompliance(product.id, true);
+  const config = useQuery({ queryKey: ['config'], queryFn: () => api<PublicConfig>('/config'), retry: false });
+  const enabled = config.data?.features.import_review === true;
+  const state = useCompliance(product.id, enabled);
   const [requesting, setRequesting] = useState(false);
   const [deciding, setDeciding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const gate = state.data?.gate;
   const current = state.data?.current;
+
+  if (!config.data) return <section className="panel compliance-panel">
+    <div className="section-heading">
+      <div><h2>Import readiness</h2><p>Release scope is unavailable.</p></div>
+      <ShieldCheck size={19} />
+    </div>
+    <Notice kind="amber">Import-review actions stay unavailable until the release scope can
+      be verified.</Notice>
+  </section>;
+
+  if (!enabled) return <section className="panel compliance-panel">
+    <div className="section-heading">
+      <div><h2>Import readiness</h2><p>Qualified review is outside this release scope.</p></div>
+      <ShieldCheck size={19} />
+    </div>
+    <Notice kind="amber">Import-review requests and decisions are disabled. TrendSell cannot
+      clear this gate until Product approves a qualified reviewer, category and Nigeria
+      jurisdiction scope. Existing review history remains in exports but is not actionable.</Notice>
+  </section>;
 
   return <section className="panel compliance-panel">
     <div className="section-heading">

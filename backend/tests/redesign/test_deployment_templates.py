@@ -92,7 +92,7 @@ def test_backup_check_is_scoped_to_the_one_shot_credentials_and_runs_repeatedly(
     application_service = APPLICATION_SERVICE.read_text()
     assert 'User=trendsell' in service
     assert 'EnvironmentFile=/etc/trendsell/backup-s3.env' in service
-    assert 'ExecStart=/usr/local/sbin/trendsell-backup-check' in service
+    assert 'ExecStart=/opt/trendsell/current/scripts/check_backup.sh' in service
     assert 'NoNewPrivileges=true' in service
     assert 'CapabilityBoundingSet=' in service
     assert 'backup-s3.env' not in application_service

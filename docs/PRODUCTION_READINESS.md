@@ -1,6 +1,6 @@
 # Definitive production readiness checklist
 
-Updated 14 September 2026 on branch `impl/evidence-platform-phase0`.
+Updated 16 September 2026 on branch `impl/evidence-platform-phase0`.
 
 This is TrendSell's release contract for the current architecture: a React static frontend,
 FastAPI service, PostgreSQL database, nginx reverse proxy, systemd-managed application and backup
@@ -13,6 +13,11 @@ than a list of work completed in the repository.
 an existing owner admits only the approved cohort through email-bound invitations. No billing,
 payment, public sign-up or general-availability claim is in scope. This scope decision does not turn
 any blocked readiness gate into a pass.
+
+The current [decision sheet](releases/2026-09-16-decision-sheet.md) contains recommended values,
+cost/resource impact and the exact named approvals still needed. They remain proposals. The
+[blocker register](releases/2026-09-16-blocker-register.md) accounts for all 60 blocked gate IDs and
+separates implementation capability from environment evidence and human decisions.
 
 | Release tier | Decision | Reason |
 | --- | --- | --- |

@@ -37,7 +37,10 @@ server {
     server_name ${TRENDSELL_DOMAIN};
     server_tokens off;
 
-    root /var/www/${TRENDSELL_DOMAIN};
+    # The release manager atomically switches this symlink only after checksum,
+    # manifest, privilege and migration checks. Backend and static files therefore move
+    # together as one exact artifact.
+    root /opt/trendsell/current/frontend/dist;
     index index.html;
 
     access_log /var/log/nginx/${TRENDSELL_DOMAIN}.access.log trendsell_safe;

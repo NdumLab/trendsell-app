@@ -12,7 +12,7 @@ Wants=network.target
 Type=simple
 User=trendsell
 Group=trendsell
-WorkingDirectory=/opt/trendsell/backend
+WorkingDirectory=/opt/trendsell/current/backend
 EnvironmentFile=/etc/trendsell/trendsell.env
 UMask=0077
 
@@ -52,6 +52,7 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 ReadOnlyPaths=/opt/trendsell /etc/trendsell
+ReadWritePaths=/var/lib/trendsell/deletions
 
 [Install]
 WantedBy=multi-user.target

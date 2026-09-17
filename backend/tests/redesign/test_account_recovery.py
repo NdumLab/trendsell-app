@@ -27,11 +27,12 @@ NEW_PASSWORD = 'a-brand-new-long-password'
 
 
 @pytest.fixture
-def sink_app(database_url):
+def sink_app(database_url, tmp_path):
     """An app whose mail goes to a local sink, so a test can read what was sent."""
     settings = Settings(environment='test', database_url=database_url,
                         origins=('http://localhost:3000',), allow_registration=True,
-                        mail_transport='sink')
+                        mail_transport='sink',
+                        deletion_register_dir=str(tmp_path / 'deletion-register'))
     return create_app(settings)
 
 
@@ -330,6 +331,7 @@ def test_diagnostic_mail_transports_are_refused_in_production(monkeypatch, trans
     monkeypatch.setenv('CORS_ORIGINS', 'https://app.example.com')
     monkeypatch.setenv('RATE_KEY_SECRET', 'an-independent-production-rate-key-secret')
     monkeypatch.setenv('MAIL_TRANSPORT', transport)
+    monkeypatch.setenv('DELETION_REGISTER_DIR', '/var/lib/trendsell/deletions')
     with pytest.raises(ValueError, match='development diagnostics'):
         Settings.from_env()
 
@@ -380,6 +382,7 @@ def test_production_accepts_a_complete_tls_smtp_configuration(monkeypatch):
     monkeypatch.setenv('SMTP_USERNAME', 'mailer')
     monkeypatch.setenv('SMTP_PASSWORD', 'secret')
     monkeypatch.setenv('MAIL_FROM', 'security@example.com')
+    monkeypatch.setenv('DELETION_REGISTER_DIR', '/var/lib/trendsell/deletions')
     settings = Settings.from_env()
     assert settings.mail_transport == 'smtp'
     assert mail.build(settings).configured is True
@@ -403,6 +406,7 @@ def test_incomplete_or_insecure_production_smtp_is_refused(monkeypatch, change, 
         'MAIL_FROM': 'security@example.com',
         'SMTP_STARTTLS': 'true',
         'SMTP_SSL': 'false',
+        'DELETION_REGISTER_DIR': '/var/lib/trendsell/deletions',
     }
     values.update(change)
     for name, value in values.items():
@@ -417,6 +421,7 @@ def test_production_requires_a_non_enumerable_rate_key(monkeypatch):
     monkeypatch.setenv('DATABASE_URL', 'postgresql+psycopg://user:password@db.example/app')
     monkeypatch.setenv('CORS_ORIGINS', 'https://app.example.com')
     monkeypatch.setenv('MAIL_TRANSPORT', '')
+    monkeypatch.setenv('DELETION_REGISTER_DIR', '/var/lib/trendsell/deletions')
     monkeypatch.setenv('RATE_KEY_SECRET', '')
     with pytest.raises(ValueError, match='RATE_KEY_SECRET'):
         Settings.from_env()

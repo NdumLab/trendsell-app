@@ -12,10 +12,11 @@ AMAZON = 'https://www.amazon.com/dp/B0ABCDEFGH'
 
 
 @pytest.fixture
-def membership_app(database_url):
+def membership_app(database_url, tmp_path):
     return create_app(Settings(environment='test', database_url=database_url,
                                origins=('http://localhost:3000',), allow_registration=True,
-                               mail_transport='sink'))
+                               mail_transport='sink',
+                               deletion_register_dir=str(tmp_path / 'deletion-register')))
 
 
 @pytest.fixture

@@ -43,6 +43,10 @@ class Settings:
     #: Audit events are useful for investigation but still carry pseudonymous user and
     #: workspace identifiers. Production therefore requires an explicit bounded policy.
     audit_retention_days: int = 365
+    #: Append-only deletion intent lives outside PostgreSQL so an older restore cannot
+    #: resurrect a workspace deleted after that recovery point. Production requires an
+    #: explicit restricted directory; tests opt in with a disposable path.
+    deletion_register_dir: str = ''
     smtp_host: str = ''
     smtp_port: int = 587
     smtp_username: str = ''
@@ -68,6 +72,11 @@ class Settings:
     amazon_creators_marketplace: str = 'www.amazon.com'
     amazon_creators_usage_rights: str = ''
     amazon_creators_timeout_seconds: float = 12.0
+    #: Actionable import review stays unavailable in production until Product names the
+    #: qualified category/jurisdiction scope. Development/test defaults keep the workflow
+    #: exercisable; production from_env defaults it off and requires an approval reference.
+    import_review_enabled: bool = True
+    import_review_policy_ref: str = ''
 
     @classmethod
     def from_env(cls):
@@ -156,6 +165,12 @@ class Settings:
         if audit_retention_days < 30 or audit_retention_days > 3650:
             raise ValueError('AUDIT_RETENTION_DAYS must be between 30 and 3650')
 
+        deletion_register_dir = os.getenv('DELETION_REGISTER_DIR', '').strip()
+        if env == 'production' and (not os.path.isabs(deletion_register_dir)
+                                    or os.path.normpath(deletion_register_dir) == os.path.sep):
+            raise ValueError(
+                'DELETION_REGISTER_DIR must be a dedicated absolute path in production')
+
         public_app_url = os.getenv('PUBLIC_APP_URL', '').strip().rstrip('/')
         if public_app_url and (not public_app_url.startswith(('http://', 'https://'))
                                or (env == 'production' and not public_app_url.startswith('https://'))):
@@ -175,6 +190,13 @@ class Settings:
         if amazon_timeout < 1 or amazon_timeout > 60:
             raise ValueError('AMAZON_CREATORS_TIMEOUT_SECONDS must be between 1 and 60')
 
+        import_review_enabled = enabled(
+            'IMPORT_REVIEW_ENABLED', 'false' if env == 'production' else 'true')
+        import_review_policy_ref = os.getenv('IMPORT_REVIEW_POLICY_REF', '').strip()
+        if env == 'production' and import_review_enabled and not import_review_policy_ref:
+            raise ValueError(
+                'IMPORT_REVIEW_POLICY_REF is required when import review is enabled in production')
+
         return cls(
             environment=env, release_tier=release_tier, database_url=url, origins=origins,
             allow_registration=allow_registration,
@@ -186,6 +208,7 @@ class Settings:
             metrics_token=os.getenv('METRICS_TOKEN', ''), mail_transport=transport,
             mail_sink_dir=os.getenv('MAIL_SINK_DIR', ''), schema_recheck_seconds=recheck,
             rate_key_secret=rate_key_secret, audit_retention_days=audit_retention_days,
+            deletion_register_dir=deletion_register_dir,
             smtp_host=smtp_host, smtp_port=smtp_port, smtp_username=smtp_username,
             smtp_password=smtp_password, mail_from=mail_from, smtp_starttls=smtp_starttls,
             smtp_ssl=smtp_ssl, public_app_url=public_app_url,
@@ -198,4 +221,6 @@ class Settings:
             amazon_creators_partner_tag=os.getenv('AMAZON_CREATORS_PARTNER_TAG', '').strip(),
             amazon_creators_marketplace=amazon_marketplace,
             amazon_creators_usage_rights=os.getenv('AMAZON_CREATORS_USAGE_RIGHTS', '').strip(),
-            amazon_creators_timeout_seconds=amazon_timeout)
+            amazon_creators_timeout_seconds=amazon_timeout,
+            import_review_enabled=import_review_enabled,
+            import_review_policy_ref=import_review_policy_ref)

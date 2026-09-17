@@ -74,10 +74,11 @@ def database_url(tmp_path):
 
 
 @pytest.fixture
-def settings(database_url):
+def settings(database_url, tmp_path):
     return Settings(environment='test', database_url=database_url,
                     origins=('http://localhost:3000',), allow_registration=True, research_daily_limit=20,
-                    metrics_token=METRICS_TOKEN)
+                    metrics_token=METRICS_TOKEN,
+                    deletion_register_dir=str(tmp_path / 'deletion-register'))
 
 
 @pytest.fixture

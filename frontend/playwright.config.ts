@@ -25,6 +25,7 @@ const ORIGIN = `http://127.0.0.1:${WEB_PORT}`;
 const RUN_DIR = process.env.TRENDSELL_E2E_RUN_DIR ?? mkdtempSync(join(tmpdir(), 'trendsell-e2e-'));
 process.env.TRENDSELL_E2E_RUN_DIR = RUN_DIR;
 const DATABASE = join(RUN_DIR, 'e2e.db');
+const DELETION_REGISTER = join(RUN_DIR, 'deletions');
 /** The local mail sink, so the browser can exercise the flows that carry a token —
  *  password reset, email verification and invitations — exactly as a person would: by
  *  reading the token out of the message that was sent, not out of the database. The sink
@@ -78,6 +79,7 @@ export default defineConfig({
         // are not capped at one page (review finding R10). The shipped write limit is a
         // deliberate throttle on exactly that; test_request_limits.py covers it directly.
         WORKSPACE_WRITE_MINUTE_LIMIT: '5000',
+        DELETION_REGISTER_DIR: DELETION_REGISTER,
         MAIL_TRANSPORT: 'sink',
         MAIL_SINK_DIR: MAIL_DIR,
       },

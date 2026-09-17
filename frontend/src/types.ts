@@ -9,7 +9,13 @@ export interface PublicConfig {
   demo: boolean;
   research_daily_limit: number;
   mail_delivery_configured: boolean;
+  account_recovery: 'email' | 'operator_required';
   audit_retention_days: number;
+  features: {
+    billing: boolean; public_registration: boolean; recurring_monitoring: boolean;
+    alert_delivery: boolean; import_review: boolean; attachments: boolean;
+    additional_markets: boolean;
+  };
 }
 /** One dated record about a product. Manual records are 'User input'; records from a
  *  connected, authorised collector are 'Observed' (E06). */

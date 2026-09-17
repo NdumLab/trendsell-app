@@ -105,6 +105,32 @@ def test_a_migrated_database_serves_the_application(blank_url):
     database.engine.dispose()
 
 
+def test_release_preflight_rejects_unrecorded_unexpected_tables(tmp_path):
+    url = f'sqlite:///{tmp_path / "unexpected.db"}'
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(text('CREATE TABLE unrecorded_change (id INTEGER PRIMARY KEY)'))
+    engine.dispose()
+
+    report = migrate.preflight(url)
+    assert report['current_revision'] is None
+    assert report['unexpected_tables'] == ['unrecorded_change']
+    assert report['matches_current_revision'] is False
+
+
+def test_release_preflight_rejects_unrecorded_unexpected_columns(blank_url):
+    migrate.upgrade(blank_url)
+    engine = create_engine(blank_url)
+    with engine.begin() as connection:
+        connection.execute(text('ALTER TABLE workspaces ADD COLUMN unrecorded_change TEXT'))
+    engine.dispose()
+
+    report = migrate.preflight(blank_url)
+    assert report['current_revision'] == report['head_revision']
+    assert report['unexpected_columns'] == {'workspaces': ['unrecorded_change']}
+    assert report['matches_current_revision'] is False
+
+
 def test_a_baseline_era_schema_is_adopted_without_touching_its_data(blank_url):
     """The installation being adopted matches the baseline, not necessarily the models."""
     seed(blank_url, revision=migrate.BASELINE)

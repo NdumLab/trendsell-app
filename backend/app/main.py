@@ -17,6 +17,8 @@ from . import migrate
 from .settings import Settings
 from .db import (Database, Workspace, User, Session, RecoveryToken, Invitation, Record,
                  Audit, RateBucket, records, audit, now, uid)
+from .deletions import (DeletionRegister, DeletionRegisterError, delete_workspace_rows,
+                        replay as replay_deletions)
 from .security import (dummy_verify, hash_password, verify_password, keyed_hash, token_hash,
                        consume, purge_expired, purge_old_audit_events, resolve_input)
 from .limits import BodyLimit, MAX_BODY_BYTES
@@ -175,6 +177,7 @@ class QuoteRequest(StrictModel):
 def create_app(settings=None):
     settings = settings or Settings.from_env()
     database = Database(settings.database_url)
+    deletion_register = DeletionRegister(settings.deletion_register_dir)
 
     def rate_identity(value):
         """HMAC low-entropy identifiers before they enter the shared rate table."""
@@ -186,6 +189,16 @@ def create_app(settings=None):
             database.create()
         # Interrupted investigations become truthful partial results after restart.
         with database.session() as db:
+            # A deletion request is written outside PostgreSQL before live rows are
+            # removed. Replaying on every start closes the crash window between those two
+            # durable operations and makes the same path apply after a restore.
+            if deletion_register.enabled:
+                result = replay_deletions(db, deletion_register.entries())
+                if result.workspaces_deleted:
+                    logger.info('deletion register replayed', extra={'context': {
+                        'entries': result.entries,
+                        'workspaces_deleted': result.workspaces_deleted,
+                    }})
             for job in db.query(Record).filter_by(kind='job').all():
                 if job.payload['status'] in {'queued','running'}:
                     p = dict(job.payload)
@@ -206,6 +219,7 @@ def create_app(settings=None):
 
     app = FastAPI(title='TrendSell Evidence API', version='2.0.0', lifespan=lifespan)
     app.state.database = database
+    app.state.deletion_register = deletion_register
     # Exposed so a test can assert against the limit actually in force rather than a
     # number copied into the test and quietly drifting from it.
     app.state.settings = settings
@@ -543,7 +557,17 @@ def create_app(settings=None):
                 'billing_enabled':False,
                 'research_daily_limit':settings.research_daily_limit,
                 'mail_delivery_configured':mailer.configured,
-                'audit_retention_days':settings.audit_retention_days}
+                'account_recovery':'email' if mailer.configured else 'operator_required',
+                'audit_retention_days':settings.audit_retention_days,
+                'features': {
+                    'billing': False,
+                    'public_registration': settings.allow_registration,
+                    'recurring_monitoring': False,
+                    'alert_delivery': False,
+                    'import_review': settings.import_review_enabled,
+                    'attachments': False,
+                    'additional_markets': False,
+                }}
 
     @app.post('/api/v1/auth/register', status_code=201)
     def register(payload: Credentials, request: Request, response: Response, db=Depends(get_db)):
@@ -1056,28 +1080,26 @@ def create_app(settings=None):
                                      'workspace requires removing them first.')
         members = db.query(User).filter_by(workspace_id=workspace_id).all()
         member_ids = [member.id for member in members]
-        db.query(Record).filter_by(workspace_id=workspace_id).delete(synchronize_session=False)
-        db.query(Audit).filter_by(workspace_id=workspace_id).delete(synchronize_session=False)
-        db.query(Invitation).filter_by(workspace_id=workspace_id).delete(synchronize_session=False)
-        db.query(Session).filter(Session.user_id.in_(member_ids)).delete(synchronize_session=False)
-        db.query(RecoveryToken).filter(
-            RecoveryToken.user_id.in_(member_ids)).delete(synchronize_session=False)
-        db.query(RateBucket).filter(RateBucket.key.like(f'%{workspace_id}%')).delete(synchronize_session=False)
+        rate_fragments = []
         for member in members:
-            db.query(RateBucket).filter(
-                RateBucket.key.like(f'%{rate_identity(member.email)}%')).delete(synchronize_session=False)
+            rate_fragments.append(rate_identity(member.email))
             # Buckets written before RATE_KEY_SECRET was introduced used a plain SHA-256
             # address digest. Remove that transition format too instead of retaining it
             # until the next expiry sweep after a workspace deletion.
-            db.query(RateBucket).filter(
-                RateBucket.key.like(f'%{token_hash(member.email)}%')).delete(synchronize_session=False)
-            db.query(RateBucket).filter(
-                RateBucket.key.like(f'%{member.id}%')).delete(synchronize_session=False)
-        db.query(User).filter_by(workspace_id=workspace_id).delete(synchronize_session=False)
-        db.delete(workspace)
+            rate_fragments.append(token_hash(member.email))
+        try:
+            entry = deletion_register.record(
+                workspace_id=workspace_id, member_ids=member_ids,
+                rate_fragments=rate_fragments, requested_at=now(),
+                request_id=REQUEST_ID.get())
+        except DeletionRegisterError as error:
+            db.rollback()
+            raise HTTPException(503, str(error))
+        delete_workspace_rows(db, entry)
         db.commit()
         response.delete_cookie('trendsell_session', path='/api')
-        logger.info('workspace deleted', extra={'context': {'records_retained': 0}})
+        logger.info('workspace deleted', extra={'context': {
+            'records_retained': 0, 'deletion_event_id': entry['event_id']}})
         return {'status': 'deleted'}
 
     @app.get('/api/v1/data-health')
@@ -1169,6 +1191,11 @@ def create_app(settings=None):
         With no decision yet the pending request is itself the state to report, so a
         product whose first review is still open reads `requested` rather than `none`.
         """
+        # Stored review records cannot silently keep an actionable gate enabled after the
+        # release scope disables the feature. They remain in exports/history, but no
+        # decision calculation treats them as current professional approval.
+        if not settings.import_review_enabled:
+            return None, False
         latest = latest_review(db, user, product_id)
         governing = governing_review(db, user, product_id)
         pending = bool(latest and latest.get('status') == 'requested'
@@ -1260,6 +1287,8 @@ def create_app(settings=None):
 
     @app.get('/api/v1/products/{product_id}/compliance')
     def compliance_state(product_id: str, user=Depends(permitted('workspace.read')), db=Depends(get_db)):
+        if not settings.import_review_enabled:
+            raise HTTPException(404, 'Import review is not enabled for this release scope.')
         owned(db,user,'product',product_id)
         review, re_review_pending = gate_review(db,user,product_id)
         gate = cmp.gate_state(review)
@@ -1283,6 +1312,8 @@ def create_app(settings=None):
     def request_review(product_id: str, payload: cmp.ReviewRequest,
                        user=Depends(permitted('workspace.write')), db=Depends(get_db)):
         """Ask a reviewer to resolve import readiness, with the context they need."""
+        if not settings.import_review_enabled:
+            raise HTTPException(404, 'Import review is not enabled for this release scope.')
         product = owned(db,user,'product',product_id)
         if payload.product_id != product_id:
             raise HTTPException(422, 'The request must name the product it is filed against.')
@@ -1314,6 +1345,8 @@ def create_app(settings=None):
         gate, leaving two `compliance.reviewed` events on one review. A decision is the
         one thing in this product that must not be lost to a race.
         """
+        if not settings.import_review_enabled:
+            raise HTTPException(404, 'Import review is not enabled for this release scope.')
         # The lock IS the read: fetching the row first and locking it afterwards would let
         # the ORM hand back the already-loaded (pre-lock) instance, so the status check
         # could still run against a stale payload. The workspace filter keeps this the

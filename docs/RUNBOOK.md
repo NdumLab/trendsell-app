@@ -7,6 +7,11 @@ Incident, breach and data-request response is defined separately in the
 [draft incident and data-request runbook](INCIDENT_AND_DATA_REQUEST_RUNBOOK.md); its pending
 contacts, approvals and tabletop remain release blockers.
 
+The current controlled-pilot proposals and all remaining gate dependencies are tracked in the
+[16 September decision sheet](releases/2026-09-16-decision-sheet.md) and
+[blocker register](releases/2026-09-16-blocker-register.md). Values in those files are proposals,
+not production authority.
+
 Nothing here authorises a deployment. It describes how a deployment is performed once
 someone with the authority to do so decides to.
 
@@ -171,6 +176,100 @@ address in the request before you have verified the requester by another route. 
 this procedure to mark an email address verified: verification requires delivering the
 purpose-bound verification credential to that address, which waits on a real provider.
 
+## Separate PostgreSQL runtime and migration roles
+
+The web service loads only the runtime URL from `trendsell.env`. Schema work loads the
+migration URL from root-only `migration.env` and runs under the separate `trendsell-migrate`
+Unix identity. Neither PostgreSQL role may be superuser, `CREATEDB`, `CREATEROLE`, replication
+or `BYPASSRLS`. The migration role owns `public` and its objects; runtime receives only
+`CONNECT`, schema `USAGE`, and table `SELECT/INSERT/UPDATE/DELETE` (plus required sequence use).
+
+The lowest-risk rollout reuses the current application login as the runtime role, creates one
+new migration login through the database administrator/provider, and rehearses the exact steps in
+staging. This avoids changing the application credential at the same moment as object ownership.
+Do not put either password in shell history or repository files.
+
+1. Verify a current backup and isolated restore. Record the current grants and object owners.
+2. Have the authorized database administrator create/rotate the two login roles and install the
+   runtime and migration URLs in their separate root-owned environment files.
+3. In staging only, set `TRENDSELL_ADMIN_URL`, `TRENDSELL_DATABASE_NAME`,
+   `TRENDSELL_RUNTIME_ROLE`, `TRENDSELL_MIGRATION_ROLE` and
+   `TRENDSELL_APPLY_ROLE_GRANTS=yes`, then run `scripts/configure_postgres_roles.sh`.
+4. Run the candidate migration with the migration URL, re-run the grant script so newly created
+   objects receive the explicit grants, then run `scripts/check_postgres_privileges.py` with both
+   secret URLs supplied through the environment. It performs rolled-back runtime CRUD and migration
+   DDL in addition to catalog checks.
+5. Start the service with only the runtime URL and run readiness plus critical-flow smoke. Repeat in
+   the approved change window only after the staging result and redacted privilege report are reviewed.
+
+If the split unexpectedly prevents service and the stop threshold is reached, the authorized
+database operator may run `scripts/rollback_postgres_roles.sh` with
+`TRENDSELL_ROLLBACK_ROLE_GRANTS=yes`. It deliberately restores broad runtime rights and membership
+for availability; it is not an acceptable steady state. Record the incident, restore service,
+diagnose in staging, and re-run `configure_postgres_roles.sh` to remove the emergency grant.
+
+## Durable deletion register and restore replay
+
+Production refuses self-service workspace deletion unless `DELETION_REGISTER_DIR` is an absolute
+path. Before deleting PostgreSQL rows, the API fsyncs a private pseudonymous JSON intent and its
+SHA-256 sidecar. A bad, partial or unexpected entry stops replay. Application startup reapplies all
+valid entries idempotently, closing the crash window after intent creation.
+
+Provision `/var/lib/trendsell/deletions` for the application identity at mode `0700`. Install both
+the path unit and 15-minute reconciliation timer from `deploy/trendsell-deletion-register-sync.*`;
+configure a private, encrypted, non-delete off-host prefix in the one-shot's root-only environment.
+The sync service verifies local entries, uses conditional object creation and compares size,
+encryption and service-side SHA-256. `scripts/check_recovery_state.sh` makes an inactive timer or a
+missing/failed completed sync a monitoring failure.
+
+After restoring an older backup into a **new isolated database**, and before any user can reach it:
+
+1. Download the complete deletion-register prefix into a new restricted directory. Do not use an
+   S3 mode that removes local files or remote objects.
+2. Run `scripts/verify_deletion_register.py --register-dir <directory>` and stop on any error.
+3. Migrate the restored database to the exact candidate schema.
+4. Run `scripts/replay_deletions.py --url <restored-url> --register-dir <directory>
+   --confirm-database <restored-database-name>`. The repeated database name prevents an accidental
+   live target; the command also rejects a schema mismatch and verifies no registered workspace
+   remains.
+5. Run `scripts/verify_restore.py`, record counts/replay results and repeat the deletion replay to
+   prove idempotency before considering a database switch.
+
+Never expire a register entry while any backup old enough to contain that workspace remains
+restorable. The proposed 45-day register period is not policy until the retention decision sheet is
+approved and the offsite backup lifecycle is verified.
+
+## Persistent monitoring and alert drill
+
+Install `trendsell-monitor.service` and `.timer` under the dedicated `trendsell-monitor` identity,
+with root-only monitor/recovery environment files and a writable
+`/var/lib/trendsell-monitor`. The monitor persists state, observations, delivery attempts and a
+Prometheus textfile independently of the web workers. It probes readiness, service/restart delta,
+fleet journal error/latency, PostgreSQL connections through a read-only monitor login, disk,
+backup/deletion-sync health, TLS expiry and SMTP when configured. State-change, reminder and
+recovery events use a generic HTTPS webhook; a separate heartbeat URL supports dead-man detection.
+
+Do not run `--test-alert` merely to test syntax: it sends an external message. After Operations
+names the destination and recipient and authorizes the drill, run it once, record receipt and
+acknowledgement, then inject/recover every critical probe using the approved staging procedure.
+Missing or failed delivery is retained as evidence and makes the one-shot fail.
+
+## Exact-artifact staging, activation and rollback
+
+`scripts/deploy_release.sh` requires the full approved commit, its CI archive and checksum, separate
+runtime/migration URLs, a verified-backup latch and an approval latch equal to the commit. The
+release manager rejects path traversal, links/special files, manifest/commit mismatch and a staged
+directory produced by a different digest. It writes immutable commit-named directories and
+atomically switches `current`/`previous`; repeated activation does not overwrite the last known-good
+target.
+
+Rehearse in production-like staging first. The script performs schema preflight, upgrade, physical
+schema check and the role privilege check before activation. A failed readiness probe switches the
+application link back but never downgrades the database. Therefore the rehearsal must prove either
+that the previous application runs for the approved rollback window against the migrated schema, or
+that the new-database restore/switch path meets RTO. Record both link targets, the artifact digest,
+database revision, stop threshold and smoke results. None of these commands authorizes production.
+
 ## Releasing
 
 1. Freeze one clean commit and let its remote workflow build the release artifact: backend
@@ -187,15 +286,21 @@ purpose-bound verification credential to that address, which waits on a real pro
    period; recovery-credential and invitation hashes are swept after their expiry.
 3. Back up the production database and verify the dump restores and replays against a
    separate database.
-4. `python -m app.migrate check` against production. Record the revision you are moving
-   from — that is the rollback target for the application version, not for the schema.
-5. Deploy the application. Install `deploy/trendsell.service.template` and
-   `deploy/nginx-trendsell.conf.template`; secrets come from `/etc/trendsell/trendsell.env`,
-   whose variables are documented in `deploy/trendsell.env.template` and which is never
-   committed. Generate `RATE_KEY_SECRET` independently from every database, metrics or
-   provider credential; production refuses values shorter than 32 characters.
-6. `python -m app.migrate upgrade`.
-7. `systemctl restart trendsell` and confirm `/api/ready` returns 200.
+4. Record `python -m app.migrate check` against production using the migration identity.
+   Record the revision you are moving from — that is the rollback target for application
+   compatibility, not authority to downgrade the schema.
+5. Install and review the candidate's `trendsell.service`, nginx, migration, deletion-sync
+   and monitor templates before the change window. Secrets come from separate root-managed
+   environment files; the web process receives only `trendsell.env` and the runtime database
+   URL. Generate `RATE_KEY_SECRET` independently from every database, metrics or provider
+   credential; production refuses values shorter than 32 characters.
+6. Supply the candidate CI archive and sidecar to `scripts/deploy_release.sh`, with the full
+   SHA as both its second argument and `TRENDSELL_APPROVE_DEPLOY`, the separate runtime and
+   migration URLs, and `TRENDSELL_BACKUP_VERIFIED=yes`. The command performs preflight,
+   migration, schema/privilege checks, atomic activation, restart and readiness rollback.
+   Do not separately unpack or rebuild the archive on the target.
+7. Confirm `current` resolves to the approved SHA, `previous` still resolves to the recorded
+   rollback application, and `/api/ready` returns 200.
 8. Verify the installed Uvicorn command includes `--no-access-log` and nginx uses
    `trendsell_safe`; make a request containing a disposable marker and confirm the marker,
    raw path, query and client address do not enter the application or access logs.
@@ -207,8 +312,9 @@ still run against the new schema for the length of a rollback window.
 
 ## Rolling back
 
-* **Application only** (schema unchanged): redeploy the previous artifact. Because
-  migrations are additive, the older code runs against the newer schema.
+* **Application only** (schema compatible): use the release manager's recorded `previous`
+  target and restart the service. The deploy script performs this switch automatically on a
+  failed readiness probe. Compatibility must have been proved in staging before release.
 * **Schema change went wrong**: restore the pre-release backup into a *new* database, point
   the service at it, and verify with `python -m app.migrate check` and `/api/ready`. Do not
   downgrade in place.

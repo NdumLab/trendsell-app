@@ -86,19 +86,23 @@ def schema_report(engine, expected_schema=None):
     """
     inspector = inspect(engine)
     present = set(inspector.get_table_names())
-    expectation = expected_schema or model_schema()
+    expectation = model_schema() if expected_schema is None else expected_schema
     expected = set(expectation)
     missing_columns = {}
+    unexpected_columns = {}
     for name in sorted(expected & present):
         declared = expectation[name]
         actual = {column['name'] for column in inspector.get_columns(name)}
         if declared - actual:
             missing_columns[name] = sorted(declared - actual)
+        if actual - declared:
+            unexpected_columns[name] = sorted(actual - declared)
     return {
         'tables_present': sorted(present),
         'missing_tables': sorted(expected - present),
         'unexpected_tables': sorted(present - expected - {'alembic_version'}),
         'missing_columns': missing_columns,
+        'unexpected_columns': unexpected_columns,
         'matches_models': not (expected - present) and not missing_columns,
         'is_empty': not (present - {'alembic_version'}),
     }
@@ -121,6 +125,26 @@ def check(url, against=None):
         report['current_revision'] = current_revision(engine)
         report['head_revision'] = head_revision(url)
         report['up_to_date'] = report['current_revision'] == report['head_revision']
+        return report
+    finally:
+        engine.dispose()
+
+
+def preflight(url):
+    """Verify the physical schema matches the revision it currently records.
+
+    Unlike readiness, a release preflight is allowed to be behind head. It is not allowed
+    to carry a broken or falsely stamped version of that older revision.
+    """
+    engine = create_engine(url)
+    try:
+        revision = current_revision(engine)
+        report = schema_report(engine, revision_schema(revision) if revision else {})
+        report['current_revision'] = revision
+        report['head_revision'] = head_revision(url)
+        report['matches_current_revision'] = (
+            report['matches_models'] and not report['unexpected_tables']
+            and not report['unexpected_columns'])
         return report
     finally:
         engine.dispose()
@@ -170,7 +194,7 @@ def downgrade(url, revision):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='TrendSell schema management')
-    parser.add_argument('action', choices=['check', 'upgrade', 'stamp'])
+    parser.add_argument('action', choices=['check', 'preflight', 'upgrade', 'stamp'])
     parser.add_argument('--url', help='Database URL. Defaults to the application settings.')
     parser.add_argument('--revision', default=None,
                         help='upgrade target (default head), or the revision to stamp (default the baseline)')
@@ -188,6 +212,13 @@ def main(argv=None):
         # With `--against`, being behind head is the expected state, not a failure: the
         # question asked was whether the schema matches that revision.
         return 0 if report['matches_models'] and (args.against or report['up_to_date']) else 1
+    if args.action == 'preflight':
+        report = preflight(url)
+        for key in ('current_revision', 'head_revision', 'matches_current_revision',
+                    'missing_tables', 'missing_columns', 'unexpected_tables',
+                    'unexpected_columns'):
+            print(f'{key}: {report[key]}')
+        return 0 if report['matches_current_revision'] else 1
     if args.action == 'upgrade':
         upgrade(url, args.revision or 'head')
         print(f'upgraded to {current_revision(create_engine(url))}')
