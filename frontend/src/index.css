@@ -314,3 +314,6 @@
 .settings-card .table-scroll{margin-bottom:14px}
 .settings-card table{font-size:11px}
 .settings-card th,.settings-card td{padding:11px 12px}
+.discovery-panel{margin-top:22px;padding:25px}
+.discovery-panel .table-scroll{margin-top:16px}
+.discovery-panel .form-caption{margin-top:16px;text-align:left}

@@ -73,7 +73,7 @@ export function SalesDriverEvidence({ records, onInspect }:
     ? records[0].truth_state : null;
   return <section className="panel sales-drivers">
     <div className="section-heading"><div><h2>Signals associated with demand</h2><p>Advertising, creator, search, and marketplace evidence for this product.</p></div>{sectionTruth?<TruthBadge truth={sectionTruth}/>:records.length?<span className="status-label">Mixed provenance</span>:<TruthBadge truth="Unavailable"/>}</div>
-    <Notice kind="muted"><strong>Association is not attribution.</strong> These signals can help explain why a product deserves investigation. They do not prove which ad, creator, search, or app caused a sale.</Notice>
+    <Notice kind="muted"><strong>Source references do not establish attribution.</strong> These signals can help explain why a product deserves investigation. They do not prove which ad, creator, search, or app caused a sale.</Notice>
     <div className="sales-driver-grid">{DRIVER_GROUPS.map(group => {
       const matches = records.filter(record => (group.metrics as readonly string[]).includes(record.metric));
       const latest = matches.at(-1);

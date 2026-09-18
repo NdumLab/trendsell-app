@@ -29,17 +29,56 @@ from .evidence import EvidenceRequest, MANUAL_TRUTH_STATE, METHOD_VERSION, METRI
 from . import compliance as cmp
 from .economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate, economics_summary
 from .pagination import DEFAULT_LIMIT, MAX_LIMIT, paginate, searched
-from .providers.amazon_creators import (AmazonCreatorsClient, AmazonCreatorsConfig,
-                                        COLLECTOR_VERSION as AMAZON_COLLECTOR_VERSION,
-                                        PARSER_VERSION as AMAZON_PARSER_VERSION,
-                                        ProviderError)
+from .providers.common import ProviderError
+from .providers.live_sources import (
+    BrightDataConfig, BrightDataJumiaClient, BRIGHTDATA_COLLECTOR_VERSION,
+    BRIGHTDATA_PARSER_VERSION, DataForSEOClient, DataForSEOConfig,
+    DATAFORSEO_COLLECTOR_VERSION, DATAFORSEO_PARSER_VERSION, match_jumia_candidates,
+    OpenExchangeRatesClient, OpenExchangeRatesConfig, OXR_COLLECTOR_VERSION,
+    OXR_PARSER_VERSION,
+)
 
 SOURCES = [
-    {'id':'amazon', 'name':'Amazon catalog', 'category':'Product identity', 'markets':['US'], 'reason':'An authorized catalog connection is required. Pasted identifiers are user input, not verified catalog data.', 'rights':'Authorization required'},
-    {'id':'google_trends', 'name':'Google Trends', 'category':'Search demand', 'markets':['US','NG'], 'reason':'No approved demand collector is connected. No search observations have been collected.', 'rights':'Source access review required'},
-    {'id':'local_market', 'name':'Nigeria market coverage', 'category':'Local supply', 'markets':['NG'], 'reason':'No local marketplace observations. Missing listings do not indicate low competition.', 'rights':'Licensed or user-assisted evidence required'},
-    {'id':'compliance', 'name':'Import requirements', 'category':'Compliance & tariffs', 'markets':['NG'], 'reason':'Product classification and effective-dated regulator evidence require review.', 'rights':'Official publications with analyst review'},
-    {'id':'freight', 'name':'Freight & currency', 'category':'Landed cost', 'markets':['CN','NG'], 'reason':'Enter dated freight quotes and your exchange-rate assumption in Decision Room.', 'rights':'User-provided inputs only'},
+    {'id':'catalog', 'name':'DataForSEO Amazon catalog', 'category':'Identity & current offer',
+     'markets':['US'], 'freshness_hours':24,
+     'reason':'No approved commercial catalog collector is connected. An ASIN is user input until a collection succeeds.',
+     'rights':'DataForSEO terms and own-product licence establish the intended internal/derived use; retain the accepted terms reference'},
+    {'id':'price_history', 'name':'Historical price and rank', 'category':'Product history',
+     'markets':['US'], 'freshness_hours':24,
+     'reason':'No licensed historical product-data source is selected. Current offers are not history.',
+     'rights':'Provider selection and retention rights required'},
+    {'id':'search_demand', 'name':'DataForSEO Trends', 'category':'Search demand indicator',
+     'markets':['NG'], 'freshness_hours':24,
+     'reason':'No approved Nigeria search-interest collector is connected. Search interest is not observed sales.',
+     'rights':'DataForSEO terms and own-product licence establish the intended internal/derived use; retain the accepted terms reference'},
+    {'id':'local_market', 'name':'Bright Data Jumia Nigeria', 'category':'Local listing candidates',
+     'markets':['NG'], 'freshness_hours':24,
+     'reason':'No approved Jumia Nigeria collector is connected. Missing listings never imply low competition.',
+     'rights':'Bright Data terms cover public-data collection; confirm that the accepted intended use includes the selected Jumia target and pilot-user display'},
+    {'id':'fx', 'name':'Open Exchange Rates', 'category':'Reference FX',
+     'markets':['GLOBAL','NG','CN'], 'freshness_hours':24,
+     'reason':'No commercial FX feed is connected. Decision Room rates remain explicit user assumptions.',
+     'rights':'Open Exchange Rates documents response caching; use a licensed plan and record its applicable licence basis'},
+    {'id':'freight', 'name':'DHL Express rating', 'category':'Freight',
+     'markets':['CN','NG'], 'freshness_hours':24,
+     'reason':'No contracted freight-rating source is connected. Freight remains a dated quote or user assumption.',
+     'rights':'DHL account and display consent required'},
+    {'id':'compliance', 'name':'Nigeria regulatory publications', 'category':'Compliance & tariffs',
+     'markets':['NG'], 'freshness_hours':24,
+     'reason':'NAFDAC and Customs publish references, but no approved automation/feed exists; classification still requires review.',
+     'rights':'Official feed/automation permission and analyst review required'},
+    {'id':'advertising', 'name':'Advertising signals', 'category':'Demand driver indicator',
+     'markets':['NG'], 'freshness_hours':24,
+     'reason':'Meta and TikTok public transparency APIs do not provide general Nigeria commercial-ad coverage.',
+     'rights':'Nigeria commercial-ad source required'},
+    {'id':'creator', 'name':'Creator signals', 'category':'Demand driver indicator',
+     'markets':['NG'], 'freshness_hours':24,
+     'reason':'No approved Nigeria creator-signal source is connected. Mentions would not prove sales or causation.',
+     'rights':'Licensed source and derived-metric approval required'},
+    {'id':'observed_sales', 'name':'Observed sales', 'category':'Sales & attribution',
+     'markets':['NG'], 'freshness_hours':24,
+     'reason':'No merchant-authorized order source is connected. Rank, reviews, search and ads are not sales.',
+     'rights':'Pilot merchant OAuth/data-processing authority required'},
 ]
 
 #: Every record kind a workspace owns, and the collection it is exported under.
@@ -52,8 +91,9 @@ SOURCES = [
 EXPORT_KINDS = [('product','products'), ('job','research_jobs'), ('decision','decisions'),
                 ('quote','quotes'), ('watch','watches'), ('evidence','evidence'),
                 ('compliance_review','compliance_reviews'),
-                ('source_snapshot','source_snapshots'), ('source_status','source_statuses')]
-EXPORT_SCHEMA = 'trendsell-workspace-export/3'
+                ('source_snapshot','source_snapshots'), ('source_status','source_statuses'),
+                ('discovery','discovery_runs')]
+EXPORT_SCHEMA = 'trendsell-workspace-export/4'
 
 HTTPS_URL = TypeAdapter(HttpUrl)
 
@@ -119,6 +159,11 @@ class AccountDeletion(StrictModel):
 class XrayRequest(StrictModel):
     input: str = Field(min_length=10, max_length=2048)
     market: Literal['NG'] = 'NG'
+    discovery_id: str | None = Field(default=None, max_length=64)
+
+class DiscoveryRequest(StrictModel):
+    query: str = Field(min_length=2, max_length=200)
+    limit: int = Field(default=10, ge=1, le=20)
 
 class ConfirmRequest(StrictModel):
     name: str = Field(min_length=2, max_length=160)
@@ -183,6 +228,123 @@ def create_app(settings=None):
         """HMAC low-entropy identifiers before they enter the shared rate table."""
         return keyed_hash(value, settings.rate_key_secret)
 
+    def apply_provider_retention(db, workspace_id=None, cutoff=None):
+        """Delete expired provider records before an authenticated read can expose them.
+
+        A saved assessment keeps its formula inputs and result, but no longer keeps a
+        provider value beyond that value's configured retention window.  The evidence
+        entry becomes a small audit tombstone so a historical verdict remains
+        explainable without retaining the expired source data.
+        """
+        cutoff = cutoff or datetime.now(timezone.utc)
+        query = db.query(Record).filter(Record.kind.in_([
+            'evidence', 'source_snapshot', 'discovery']))
+        if workspace_id:
+            query = query.filter(Record.workspace_id == workspace_id)
+
+        def expired(record):
+            value = record.payload.get('expires_at')
+            if not value:
+                return False
+            try:
+                parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone(timezone.utc) <= cutoff
+            except (TypeError, ValueError):
+                # Fail closed: a malformed provider expiry must not become permission
+                # to retain the provider payload forever.
+                return True
+
+        expiring = [record for record in query.all() if expired(record)]
+        if not expiring:
+            return {'removed_records': 0, 'removed_snapshots': 0,
+                    'redacted_assessments': 0, 'updated_products': 0}
+        expired_evidence_ids = {record.id for record in expiring
+                                if record.kind == 'evidence'}
+        expired_snapshot_ids = {record.id for record in expiring
+                                if record.kind == 'source_snapshot'}
+        expired_discovery_ids = {record.id for record in expiring
+                                 if record.kind == 'discovery'}
+        affected_workspaces = {record.workspace_id for record in expiring}
+        applied_at = cutoff.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+        products_query = db.query(Record).filter_by(kind='product')
+        decisions_query = db.query(Record).filter_by(kind='decision')
+        if workspace_id:
+            products_query = products_query.filter(Record.workspace_id == workspace_id)
+            decisions_query = decisions_query.filter(Record.workspace_id == workspace_id)
+        else:
+            products_query = products_query.filter(Record.workspace_id.in_(affected_workspaces))
+            decisions_query = decisions_query.filter(Record.workspace_id.in_(affected_workspaces))
+
+        updated_products = 0
+        for product in products_query.all():
+            body = dict(product.payload)
+            changed = False
+            if body.get('identity_snapshot_id') in expired_snapshot_ids:
+                for key in ('catalog','identity_source','identity_source_id','identity_market',
+                            'identity_observed_at','identity_collected_at','identity_snapshot_id',
+                            'confirmed_at'):
+                    body.pop(key, None)
+                body.update(name=f"Amazon product · {body['asin']}", confirmed=False,
+                            truth_state='User input',
+                            blocker='Catalog identity expired; collect it again before using this product.')
+                changed = True
+            if body.get('local_candidates_snapshot_id') in expired_snapshot_ids:
+                for key in ('local_candidates','local_candidates_observed_at',
+                            'local_candidates_snapshot_id'):
+                    body.pop(key, None)
+                changed = True
+            if (body.get('fx_reference') or {}).get('snapshot_id') in expired_snapshot_ids:
+                body.pop('fx_reference', None)
+                changed = True
+            if (body.get('discovery_context') or {}).get('discovery_id') in expired_discovery_ids:
+                body.pop('discovery_context', None)
+                changed = True
+            if changed:
+                product.payload = body
+                updated_products += 1
+
+        redacted_assessments = 0
+        for decision in decisions_query.all():
+            body = dict(decision.payload)
+            evidence = body.get('evidence') or []
+            changed = False
+            retained = []
+            for observation in evidence:
+                if (observation.get('id') not in expired_evidence_ids
+                        and observation.get('snapshot_id') not in expired_snapshot_ids):
+                    retained.append(observation)
+                    continue
+                tombstone = {key: observation.get(key) for key in (
+                    'id', 'product_id', 'source_id', 'source_name', 'metric', 'truth_state',
+                    'observed_at', 'fetched_at', 'recorded_at', 'expires_at', 'snapshot_id',
+                    'collector_version', 'parser_version', 'usage_rights') if observation.get(key) is not None}
+                tombstone.update(
+                    value=None, unit='expired', source_url=None,
+                    verification='Expired under the configured provider-data retention policy',
+                    retention_state='expired',
+                    notes='Provider-derived values were deleted after expiry; saved economics and the original evidence reference remain historical.'
+                )
+                retained.append(tombstone)
+                changed = True
+            if changed:
+                body['evidence'] = retained
+                body['evidence_retention_applied_at'] = applied_at
+                body['expired_evidence_count'] = sum(
+                    1 for item in retained if item.get('retention_state') == 'expired')
+                decision.payload = body
+                redacted_assessments += 1
+
+        for record in expiring:
+            db.delete(record)
+        db.flush()
+        return {'removed_records': len(expiring),
+                'removed_snapshots': len(expired_snapshot_ids),
+                'redacted_assessments': redacted_assessments,
+                'updated_products': updated_products}
+
     @asynccontextmanager
     async def lifespan(app):
         if settings.environment != 'production':
@@ -204,7 +366,12 @@ def create_app(settings=None):
                     p = dict(job.payload)
                     p.update(status='partial', events=p['events']+[{'id':len(p['events'])+1,'step':'Investigation interrupted', 'status':'unavailable','detail':'The service restarted. Refresh the investigation to try again.', 'at':now()}])
                     job.payload = p
+            retention = apply_provider_retention(db)
             db.commit()
+            if retention['removed_records']:
+                logger.info('provider retention applied', extra={'context': {
+                    **retention,
+                }})
             # Expired sessions, recovery credentials and finished rate windows accumulate
             # otherwise; only rows whose own expiry has passed are removed (action plan P04).
             purge_expired(db)
@@ -220,26 +387,61 @@ def create_app(settings=None):
     app = FastAPI(title='TrendSell Evidence API', version='2.0.0', lifespan=lifespan)
     app.state.database = database
     app.state.deletion_register = deletion_register
+    app.state.apply_provider_retention = apply_provider_retention
     # Exposed so a test can assert against the limit actually in force rather than a
     # number copied into the test and quietly drifting from it.
     app.state.settings = settings
-    amazon_required = {
-        'credential id': settings.amazon_creators_credential_id,
-        'credential secret': settings.amazon_creators_credential_secret,
-        'partner tag': settings.amazon_creators_partner_tag,
-        'usage-rights and retention approval': settings.amazon_creators_usage_rights,
+    # Amazon Creators remains an isolated adapter for compatibility testing only.  Its
+    # affiliate-program conditions and refresh limits do not fit TrendSell's durable,
+    # multi-source research record, so it is not a live-pilot collector.
+    app.state.amazon_creators = None
+    dataforseo_required = {
+        'API login': settings.dataforseo_login,
+        'API password': settings.dataforseo_password,
+        'accepted terms/usage-basis reference': settings.dataforseo_usage_rights,
     }
-    amazon_missing = [name for name, value in amazon_required.items() if not value]
-    amazon_configured = settings.amazon_creators_enabled and not amazon_missing
-    app.state.amazon_creators = AmazonCreatorsClient(AmazonCreatorsConfig(
-        credential_id=settings.amazon_creators_credential_id,
-        credential_secret=settings.amazon_creators_credential_secret,
-        credential_version=settings.amazon_creators_credential_version,
-        partner_tag=settings.amazon_creators_partner_tag,
-        marketplace=settings.amazon_creators_marketplace,
-        usage_rights=settings.amazon_creators_usage_rights,
-        timeout_seconds=settings.amazon_creators_timeout_seconds,
-    )) if amazon_configured else None
+    brightdata_required = {
+        'API token': settings.brightdata_api_token,
+        'Jumia custom dataset ID': settings.brightdata_jumia_dataset_id,
+        'accepted intended-use/terms-basis reference': settings.brightdata_jumia_usage_rights,
+    }
+    oxr_required = {
+        'application ID': settings.open_exchange_rates_app_id,
+        'licensed-plan/usage-basis reference': settings.open_exchange_rates_usage_rights,
+    }
+    source_connections = {
+        'catalog': (settings.dataforseo_enabled, dataforseo_required,
+                    settings.dataforseo_usage_rights, settings.dataforseo_retention_days),
+        'search_demand': (settings.dataforseo_enabled, dataforseo_required,
+                          settings.dataforseo_usage_rights, settings.dataforseo_retention_days),
+        'local_market': (settings.brightdata_jumia_enabled, brightdata_required,
+                         settings.brightdata_jumia_usage_rights,
+                         settings.brightdata_jumia_retention_days),
+        'fx': (settings.open_exchange_rates_enabled, oxr_required,
+               settings.open_exchange_rates_usage_rights,
+               settings.open_exchange_rates_retention_days),
+    }
+    source_by_id_global = {source['id']: source for source in SOURCES}
+    dataforseo_missing = [name for name, value in dataforseo_required.items() if not value]
+    brightdata_missing = [name for name, value in brightdata_required.items() if not value]
+    oxr_missing = [name for name, value in oxr_required.items() if not value]
+    dataforseo = (DataForSEOClient(DataForSEOConfig(
+        login=settings.dataforseo_login, password=settings.dataforseo_password,
+        catalog_location_code=settings.dataforseo_catalog_location_code,
+        trends_location_code=settings.dataforseo_trends_location_code,
+        timeout_seconds=settings.dataforseo_timeout_seconds,
+    )) if settings.dataforseo_enabled and not dataforseo_missing else None)
+    brightdata = (BrightDataJumiaClient(BrightDataConfig(
+        api_token=settings.brightdata_api_token,
+        dataset_id=settings.brightdata_jumia_dataset_id,
+        timeout_seconds=settings.brightdata_timeout_seconds,
+    )) if settings.brightdata_jumia_enabled and not brightdata_missing else None)
+    oxr = (OpenExchangeRatesClient(OpenExchangeRatesConfig(
+        app_id=settings.open_exchange_rates_app_id,
+        timeout_seconds=settings.open_exchange_rates_timeout_seconds,
+    )) if settings.open_exchange_rates_enabled and not oxr_missing else None)
+    app.state.collectors = {'catalog': dataforseo, 'search_demand': dataforseo,
+                            'local_market': brightdata, 'fx': oxr}
     # Outermost, so an oversized body is refused before anything reads it. Counting the
     # bytes as they arrive is what a Content-Length check could not do (action plan P04).
     app.add_middleware(BodyLimit, limit=MAX_BODY_BYTES)
@@ -338,6 +540,12 @@ def create_app(settings=None):
             raise HTTPException(401, 'Sign in to your workspace to continue.')
         user = db.get(User, session.user_id)
         if not user or user.disabled_at: raise HTTPException(401, 'Session is no longer valid.')
+        retention = apply_provider_retention(db, user.workspace_id)
+        if retention['removed_records']:
+            db.commit()
+            logger.info('provider retention applied before authenticated access', extra={'context': {
+                'workspace_id': user.workspace_id, **retention,
+            }})
         # Both: the context variables serve `audit()` on this same thread, and the request
         # scope carries the identity back out to the logging middleware (R11).
         WORKSPACE_ID.set(user.workspace_id)
@@ -1105,33 +1313,99 @@ def create_app(settings=None):
     @app.get('/api/v1/data-health')
     def data_health(user=Depends(permitted('workspace.read')), db=Depends(get_db)):
         statuses = {row.key: row.payload for row in records(db,user,'source_status').all()}
+        observations = {source['id']: set() for source in SOURCES}
+        for row in records(db,user,'evidence').all():
+            source_id = row.payload.get('source_id')
+            if source_id in observations:
+                observations[source_id].add(f'evidence:{row.id}')
+        for row in records(db,user,'product').all():
+            source_id = row.payload.get('identity_source_id')
+            if source_id in observations:
+                observations[source_id].add(f'identity:{row.id}')
+            if row.payload.get('local_candidates'):
+                observations['local_market'].update(
+                    f'local:{row.id}:{index}'
+                    for index, _ in enumerate(row.payload['local_candidates']))
+            if row.payload.get('fx_reference'):
+                observations['fx'].add(f'fx:{row.id}')
+        for row in records(db,user,'discovery').all():
+            source_id = row.payload.get('source_id')
+            if source_id in observations:
+                observations[source_id].update(
+                    f'discovery:{row.id}:{index}'
+                    for index, _ in enumerate(row.payload.get('candidates') or []))
         presented = []
         for source in SOURCES:
-            if source['id'] == 'amazon':
-                if not settings.amazon_creators_enabled:
-                    state = {'status':'unconfigured', 'reason':source['reason'],
-                             'next_retry':'After server-side connection and source review'}
-                elif amazon_missing:
-                    state = {'status':'misconfigured',
-                             'reason':'The Amazon Creators API connection is enabled but missing: '
-                                      + ', '.join(amazon_missing) + '.',
+            connection = source_connections.get(source['id'])
+            telemetry = statuses.get(source['id'], {})
+            if connection:
+                enabled_flag, required, rights, retention_days = connection
+                missing = [name for name, value in required.items() if not value]
+                if not enabled_flag:
+                    state = {**telemetry, 'reason':source['reason'],
+                             'next_retry':'After provider access and the applicable usage basis are installed server-side'}
+                    configuration_state = 'disabled'
+                elif missing:
+                    state = {**telemetry,
+                             'reason':'Connection enabled but missing: ' + ', '.join(missing) + '.',
                              'next_retry':'After the missing server-side configuration is installed'}
+                    configuration_state = 'missing_requirements'
                 else:
-                    state = statuses.get('amazon', {
-                        'status':'configured', 'last_success':None, 'last_attempt':None,
-                        'reason':'Amazon Creators API is configured. No collection attempt has completed in this workspace.',
+                    state = statuses.get(source['id'], {
+                        'last_success':None, 'last_attempt':None,
+                        'reason':'Adapter, credentials and the recorded usage basis are configured. No collection has succeeded in this workspace.',
                         'next_retry':'On the next user-requested product check'})
+                    configuration_state = 'configured'
+                rights_label = rights or source['rights']
+                adapter_state = 'implemented'
             else:
-                state = {'status':'unconfigured', 'reason':source['reason'],
+                state = {'reason':source['reason'],
                          'next_retry':'After connection and source review'}
-            rights = (settings.amazon_creators_usage_rights
-                      if source['id'] == 'amazon' and amazon_configured else source['rights'])
-            presented.append({**source, 'rights':rights, 'last_success':None, 'last_attempt':None,
-                              'freshness_hours':1 if source['id'] == 'amazon' else 24, **state})
-        connected = [source for source in presented if source['status'] == 'connected']
+                rights_label = source['rights']
+                retention_days = None
+                adapter_state = 'not_implemented'
+                configuration_state = 'not_applicable'
+            last_success = telemetry.get('last_success')
+            telemetry_state = telemetry.get('status')
+            collection_state = 'never_attempted'
+            if telemetry_state == 'collecting':
+                collection_state = 'in_progress'
+            elif telemetry_state == 'degraded':
+                collection_state = 'failed'
+            elif last_success:
+                collection_state = 'succeeded'
+                try:
+                    age = datetime.now(timezone.utc) - datetime.fromisoformat(
+                        last_success.replace('Z', '+00:00'))
+                    if age.total_seconds() > source['freshness_hours'] * 3600:
+                        collection_state = 'stale'
+                        state = {**state,
+                                 'reason':'The last successful collection is older than the source freshness target.'}
+                except (AttributeError, ValueError):
+                    collection_state = 'failed'
+                    state = {**state,
+                             'reason':'The saved success timestamp is invalid.'}
+            stored_observation_count = len(observations[source['id']])
+            observation_state = 'stored_current' if stored_observation_count else 'none'
+            api_availability_state = 'available' if stored_observation_count else 'unavailable'
+            public_state = {key:value for key,value in state.items() if key != 'status'}
+            presented.append({**source, 'rights':rights_label, 'retention_days':retention_days,
+                              'adapter_state':adapter_state,
+                              'configuration_state':configuration_state,
+                              'collection_state':collection_state,
+                              'observation_state':observation_state,
+                              'stored_observation_count':stored_observation_count,
+                              'api_availability_state':api_availability_state,
+                              'last_success':None, 'last_attempt':None, **public_state})
+        connected = [source for source in presented
+                     if source['collection_state'] == 'succeeded'
+                     and source['observation_state'] == 'stored_current'
+                     and source['api_availability_state'] == 'available']
         return {'sources':presented, 'market':'NG',
                 'coverage':None if not connected else len(connected) / len(presented) * 100,
-                'truth_state':'Observed' if connected else 'Unavailable'}
+                'truth_state':'Observed' if any(
+                    source['observation_state'] == 'stored_current' for source in presented)
+                else 'Unavailable'}
 
     @app.get('/api/v1/products')
     def products(search: str = Query(default='', max_length=200), limit: int = DEFAULT_LIMIT,
@@ -1383,127 +1657,379 @@ def create_app(settings=None):
         return serialize(row)
 
 
+    def run_discovery(discovery_id, workspace_id):
+        """Collect one bounded live keyword result without creating product records."""
+        with database.session() as db:
+            row = db.query(Record).filter_by(
+                id=discovery_id, workspace_id=workspace_id, kind='discovery').one()
+            body = dict(row.payload)
+            collector = app.state.collectors.get('catalog')
+            attempted_at = now()
+            body.update(status='running', last_attempt=attempted_at)
+            row.payload = body
+            if not collector:
+                enabled_flag, required, _, _ = source_connections['catalog']
+                missing = [name for name, value in required.items() if not value]
+                detail = (('Connection enabled but missing: ' + ', '.join(missing) + '.')
+                          if enabled_flag else source_by_id_global['catalog']['reason'])
+                body.update(status='unavailable', error_code='not_configured', detail=detail)
+                row.payload = body
+                db.commit()
+                return
+            source_status(db, workspace_id, 'catalog', status='collecting',
+                          last_attempt=attempted_at,
+                          reason='A user-requested product discovery collection is running.')
+            db.commit()
+            try:
+                collected = collector.discover_products(body['query'], body['limit'])
+            except ProviderError as problem:
+                body = dict(row.payload)
+                body.update(status='unavailable', error_code=problem.code,
+                            detail=problem.detail)
+                row.payload = body
+                source_status(db, workspace_id, 'catalog', status='degraded',
+                              last_attempt=attempted_at, reason=problem.detail,
+                              next_retry=problem.retry_after)
+                db.commit()
+                return
+            except Exception:
+                logger.exception('live discovery adapter failed', extra={'context': {
+                    'workspace_id':workspace_id, 'discovery_id':discovery_id,
+                    'source_id':'catalog', 'error_class':'unexpected_provider_failure'}})
+                detail = 'Product discovery failed in its adapter. No candidates were recorded.'
+                body = dict(row.payload)
+                body.update(status='unavailable', error_code='adapter_error', detail=detail)
+                row.payload = body
+                source_status(db, workspace_id, 'catalog', status='degraded',
+                              last_attempt=attempted_at, reason=detail,
+                              next_retry='Retry once; review the adapter if it repeats')
+                db.commit()
+                return
+
+            collected_at = now()
+            expires_at = (datetime.fromisoformat(collected_at.replace('Z', '+00:00')) +
+                          timedelta(days=settings.dataforseo_retention_days)).isoformat().replace(
+                              '+00:00', 'Z')
+            provider_item = collected['provider_item']
+            digest = hashlib.sha256(json.dumps(
+                provider_item, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            snapshot_payload = {
+                'discovery_id':row.id, 'product_id':None, 'source_id':'catalog',
+                'source':'DataForSEO Amazon Products', 'source_market':'US',
+                'observed_at':collected['observed_at'], 'collected_at':collected_at,
+                'expires_at':expires_at, 'retention_days':settings.dataforseo_retention_days,
+                'collector_version':DATAFORSEO_COLLECTOR_VERSION,
+                'parser_version':DATAFORSEO_PARSER_VERSION,
+                'usage_rights':settings.dataforseo_usage_rights,
+                'provider_request_id':collected.get('request_id'),
+                'provider_cost_usd':collected.get('task_cost_usd'),
+                'response_sha256':digest,
+                'normalized_payload':{
+                    'query':collected['query'], 'candidates':collected['candidates'],
+                    'observed_at':collected['observed_at'],
+                    'source_url':collected.get('source_url'),
+                },
+            }
+            snapshot_key = (f"catalog:discovery:{row.id}:{collected['observed_at']}:{digest}")
+            requester = db.get(User, body.get('requested_by'))
+            if requester:
+                snapshot_row = insert_unique(
+                    db, requester, 'source_snapshot', snapshot_key, snapshot_payload)[0]
+            else:
+                snapshot_row = Record(workspace_id=workspace_id, kind='source_snapshot',
+                                      key=snapshot_key, payload=snapshot_payload)
+                db.add(snapshot_row); db.flush()
+            body = dict(row.payload)
+            body.update(
+                status='succeeded', source_id='catalog', source_name='DataForSEO Amazon Products',
+                truth_state='Observed', candidates=collected['candidates'],
+                observed_at=collected['observed_at'], collected_at=collected_at,
+                expires_at=expires_at, source_url=collected.get('source_url'),
+                provider_request_id=collected.get('request_id'), snapshot_id=snapshot_row.id,
+                detail=('Current organic Amazon query results were collected as candidates. '
+                        'Position, price, ratings and Amazon-displayed purchase indicators are '
+                        'observations, not recommendations, verified sales or attribution.'))
+            row.payload = body
+            succeeded_at = now()
+            source_status(db, workspace_id, 'catalog', status='connected',
+                          last_attempt=attempted_at, last_success=succeeded_at,
+                          reason='The latest product discovery collection succeeded and its current candidates are stored in the authenticated API.',
+                          next_retry='On the next user-requested discovery or product check')
+            db.commit()
+
     def run_job(job_id, workspace_id):
         with database.session() as db:
             row = db.query(Record).filter_by(id=job_id, workspace_id=workspace_id, kind='job').one()
             p = dict(row.payload)
             product = db.query(Record).filter_by(
                 id=p['product_id'], workspace_id=workspace_id, kind='product').one()
-            collector = app.state.amazon_creators
-            if not collector:
-                detail = (f"Amazon Creators API is enabled but missing {', '.join(amazon_missing)}."
-                          if settings.amazon_creators_enabled else SOURCES[0]['reason'])
-                p['events'] = p['events']+[{'id':len(p['events'])+1,'step':'Amazon catalog',
-                                             'status':'unavailable','detail':detail,'at':now()}]
-            else:
+            requester = db.get(User, p.get('requested_by'))
+            source_by_id = {source['id']: source for source in SOURCES}
+
+            def expiry(days, collected_at):
+                parsed = datetime.fromisoformat(collected_at.replace('Z', '+00:00'))
+                return (parsed + timedelta(days=days)).isoformat().replace('+00:00', 'Z')
+
+            def snapshot(source_id, name, market, collected, collector_version,
+                         parser_version, usage_rights, retention_days):
+                collected_at = now()
+                provider_item = collected['provider_item']
+                digest = hashlib.sha256(json.dumps(
+                    provider_item, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                payload = {
+                    'product_id':product.id, 'source_id':source_id, 'source':name,
+                    'source_market':market, 'observed_at':collected['observed_at'],
+                    'collected_at':collected_at, 'expires_at':expiry(retention_days, collected_at),
+                    'retention_days':retention_days, 'collector_version':collector_version,
+                    'parser_version':parser_version, 'usage_rights':usage_rights,
+                    'provider_request_id':collected.get('request_id'),
+                    'provider_cost_usd':collected.get('task_cost_usd'),
+                    'response_sha256':digest,
+                    'normalized_payload':{
+                        key:value for key,value in collected.items()
+                        if key not in {'provider_item', 'request_id', 'task_cost_usd'}
+                    },
+                }
+                key = f"{source_id}:{product.id}:{collected['observed_at']}:{digest}"
+                if requester:
+                    return insert_unique(db, requester, 'source_snapshot', key, payload)[0]
+                existing = db.query(Record).filter_by(
+                    workspace_id=workspace_id, kind='source_snapshot', key=key).first()
+                if existing:
+                    return existing
+                stored = Record(workspace_id=workspace_id, kind='source_snapshot',
+                                key=key, payload=payload)
+                db.add(stored); db.flush()
+                return stored
+
+            def evidence(source_id, source_name, snapshot_row, collected_at, retention_days,
+                         collector_version, parser_version, **fields):
+                if not requester:
+                    return None
+                payload = {
+                    'product_id':product.id, 'source_id':source_id,
+                    'source_name':source_name, 'truth_state':'Observed',
+                    'verification':'Provider response', 'recorded_at':collected_at,
+                    'fetched_at':collected_at, 'expires_at':expiry(retention_days, collected_at),
+                    'snapshot_id':snapshot_row.id, 'collector_version':collector_version,
+                    'parser_version':parser_version,
+                    'usage_rights':source_connections[source_id][2], **fields,
+                }
+                canonical = json.dumps({key:payload.get(key) for key in (
+                    'source_id','product_id','metric','value','unit','observed_at','source_url','series')},
+                    sort_keys=True, separators=(',', ':'))
+                key = f'{source_id}:{hashlib.sha256(canonical.encode()).hexdigest()}'
+                return insert_unique(db, requester, 'evidence', key, payload)[0]
+
+            def attempt(source_id, label, call, save):
+                nonlocal p
+                collector = app.state.collectors.get(source_id)
+                if not collector:
+                    connection = source_connections[source_id]
+                    enabled_flag, required, _, _ = connection
+                    missing = [name for name, value in required.items() if not value]
+                    detail = (('Connection enabled but missing: ' + ', '.join(missing) + '.')
+                              if enabled_flag else source_by_id[source_id]['reason'])
+                    p['events'] = p['events'] + [{
+                        'id':len(p['events'])+1, 'step':label, 'status':'unavailable',
+                        'detail':detail, 'at':now()}]
+                    return None
                 attempted_at = now()
-                p.update(status='running')
+                p['status'] = 'running'
                 row.payload = p
-                source_status(db, workspace_id, 'amazon', status='collecting',
+                source_status(db, workspace_id, source_id, status='collecting',
                               last_attempt=attempted_at,
-                              reason='A user-requested Amazon catalog collection is running.')
+                              reason=f'A user-requested {label.lower()} collection is running.')
                 db.commit()
                 try:
-                    collected = collector.get_item(product.payload['asin'])
+                    collected = call(collector)
+                    detail, snapshot_id = save(collected)
                 except ProviderError as problem:
                     p = dict(row.payload)
-                    p['events'] = p['events']+[{'id':len(p['events'])+1,'step':'Amazon catalog',
-                                                 'status':'unavailable','detail':problem.detail,
-                                                 'error_code':problem.code,'at':now()}]
-                    source_status(db, workspace_id, 'amazon', status='degraded',
+                    p['events'] = p['events'] + [{
+                        'id':len(p['events'])+1, 'step':label, 'status':'unavailable',
+                        'detail':problem.detail, 'error_code':problem.code, 'at':now()}]
+                    source_status(db, workspace_id, source_id, status='degraded',
                                   last_attempt=attempted_at, reason=problem.detail,
                                   next_retry=problem.retry_after)
+                    db.commit()
+                    return None
                 except Exception:
-                    # The job must resolve even when a provider changes an undocumented
-                    # response shape. Log only the class/correlation context; never the
-                    # credential, token, request body, or provider response.
-                    logger.exception('amazon collector failed', extra={'context': {
+                    logger.exception('live source adapter failed', extra={'context': {
                         'workspace_id':workspace_id, 'job_id':job_id,
-                        'error_class':'unexpected_provider_failure'}})
-                    detail = 'Amazon collection failed in the source adapter. No demand observation was recorded.'
+                        'source_id':source_id, 'error_class':'unexpected_provider_failure'}})
+                    detail = f'{label} failed in its adapter. No observation was recorded.'
                     p = dict(row.payload)
-                    p['events'] = p['events']+[{'id':len(p['events'])+1,'step':'Amazon catalog',
-                                                 'status':'unavailable','detail':detail,
-                                                 'error_code':'adapter_error','at':now()}]
-                    source_status(db, workspace_id, 'amazon', status='degraded',
+                    p['events'] = p['events'] + [{
+                        'id':len(p['events'])+1, 'step':label, 'status':'unavailable',
+                        'detail':detail, 'error_code':'adapter_error', 'at':now()}]
+                    source_status(db, workspace_id, source_id, status='degraded',
                                   last_attempt=attempted_at, reason=detail,
                                   next_retry='Retry once; review the adapter if it repeats')
-                else:
-                    collected_at = now()
-                    provider_item = collected.pop('provider_item')
-                    digest = hashlib.sha256(json.dumps(
-                        provider_item, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-                    requester = db.get(User, p.get('requested_by'))
-                    snapshot_payload = {
-                        'product_id': product.id, 'source':'Amazon Creators API',
-                        'source_market':settings.amazon_creators_marketplace,
-                        'observed_at':collected_at, 'collected_at':collected_at,
-                        'collector_version':AMAZON_COLLECTOR_VERSION,
-                        'parser_version':AMAZON_PARSER_VERSION,
-                        'usage_rights':settings.amazon_creators_usage_rights,
-                        'provider_request_id':collected.get('request_id'),
-                        'response_sha256':digest, 'provider_item':provider_item,
-                    }
-                    if requester:
-                        snapshot = insert(db, requester, 'source_snapshot', snapshot_payload)
-                    else:
-                        snapshot = Record(workspace_id=workspace_id, kind='source_snapshot',
-                                          key=uid(), payload=snapshot_payload)
-                        db.add(snapshot); db.flush()
-                    catalog = {key:value for key,value in collected.items() if key != 'request_id'}
-                    product.payload = {**product.payload,
-                        'name':catalog.get('title') or product.payload['name'],
-                        'category':catalog.get('category') or product.payload['category'],
-                        'source_url':catalog.get('detail_page_url') or product.payload['source_url'],
-                        'confirmed':True, 'confirmed_at':collected_at, 'truth_state':'Observed',
-                        'identity_source':'Amazon Creators API',
-                        'identity_market':settings.amazon_creators_marketplace,
-                        'identity_observed_at':collected_at, 'identity_collected_at':collected_at,
-                        'identity_snapshot_id':snapshot.id, 'catalog':catalog,
-                        'blocker':'Collect independent demand and Nigeria local-market evidence.'}
-                    observations = []
-                    if catalog.get('website_sales_rank') is not None:
-                        observations.append(('Marketplace rank', catalog['website_sales_rank'],
-                                             'rank', catalog.get('rank_category') or 'Amazon website'))
-                    if catalog.get('offer_amount') is not None and catalog.get('offer_currency'):
-                        observations.append(('Marketplace price', catalog['offer_amount'],
-                                             catalog['offer_currency'], 'Featured offer'))
-                    for metric, value, unit, notes in observations:
-                        evidence_payload = {
-                            'product_id':product.id, 'metric':metric, 'value':value, 'unit':unit,
-                            'market':'US', 'observed_at':collected_at,
-                            'source_name':'Amazon Creators API',
-                            'source_url':catalog.get('detail_page_url') or product.payload['source_url'],
-                            'method':'GetItems current catalog response', 'notes':notes,
-                            'truth_state':'Observed', 'verification':'Provider response',
-                            'recorded_at':collected_at, 'fetched_at':collected_at,
-                            'snapshot_id':snapshot.id, 'collector_version':AMAZON_COLLECTOR_VERSION,
-                            'parser_version':AMAZON_PARSER_VERSION,
-                            'usage_rights':settings.amazon_creators_usage_rights,
-                        }
-                        key = f"amazon:{product.payload['asin']}:{metric}:{collected_at[:10]}:{value}"
-                        if requester:
-                            insert_unique(db, requester, 'evidence', key, evidence_payload)
-                    missing = [label for field,label in (
-                        ('website_sales_rank','sales rank'), ('offer_amount','featured offer price'))
-                               if field not in catalog]
-                    detail = 'Amazon resolved the product identity and stored only supplied catalog fields.'
-                    if missing:
-                        detail += ' Unavailable in this response: ' + ', '.join(missing) + '.'
-                    detail += ' Sales history, review velocity, and seller counts were not requested or inferred.'
-                    p = dict(row.payload)
-                    p['events'] = p['events']+[{'id':len(p['events'])+1,'step':'Amazon catalog',
-                                                 'status':'succeeded','detail':detail,
-                                                 'snapshot_id':snapshot.id,'at':collected_at}]
-                    source_status(db, workspace_id, 'amazon', status='connected',
-                                  last_attempt=attempted_at, last_success=collected_at,
-                                  reason='The latest user-requested Amazon catalog collection succeeded.',
-                                  next_retry='On the next user-requested product check')
-            p['events'] = p['events']+[{'id':len(p['events'])+1,'step':'Google Trends',
-                                         'status':'unavailable','detail':SOURCES[1]['reason'],'at':now()}]
+                    db.commit()
+                    return None
+                succeeded_at = now()
+                p = dict(row.payload)
+                p['events'] = p['events'] + [{
+                    'id':len(p['events'])+1, 'step':label, 'status':'succeeded',
+                    'detail':detail, 'snapshot_id':snapshot_id, 'at':succeeded_at}]
+                source_status(db, workspace_id, source_id, status='connected',
+                              last_attempt=attempted_at, last_success=succeeded_at,
+                              reason=f'The latest {label.lower()} collection succeeded and its normalized observations are stored in the authenticated API.',
+                              next_retry='On the next user-requested product check')
+                row.payload = p
+                db.commit()
+                return collected
+
+            def save_catalog(collected):
+                snap = snapshot('catalog', 'DataForSEO Amazon API', 'US', collected,
+                                DATAFORSEO_COLLECTOR_VERSION, DATAFORSEO_PARSER_VERSION,
+                                settings.dataforseo_usage_rights,
+                                settings.dataforseo_retention_days)
+                collected_at = now()
+                excluded = {'provider_item','request_id','task_cost_usd','observed_at'}
+                catalog = {key:value for key,value in collected.items() if key not in excluded}
+                product.payload = {**product.payload,
+                    'name':catalog.get('title') or product.payload['name'],
+                    'category':catalog.get('category') or product.payload['category'],
+                    'source_url':catalog.get('detail_page_url') or product.payload['source_url'],
+                    'confirmed':True, 'confirmed_at':collected_at, 'truth_state':'Observed',
+                    'identity_source':'DataForSEO Amazon API', 'identity_source_id':'catalog',
+                    'identity_market':'US', 'identity_observed_at':collected['observed_at'],
+                    'identity_collected_at':collected_at, 'identity_snapshot_id':snap.id,
+                    'catalog':catalog,
+                    'blocker':'Collect independent demand, Nigeria local-market, freight and regulatory evidence.'}
+                if catalog.get('offer_amount') is not None and catalog.get('offer_currency'):
+                    evidence('catalog', 'DataForSEO Amazon API', snap, collected_at,
+                             settings.dataforseo_retention_days, DATAFORSEO_COLLECTOR_VERSION,
+                             DATAFORSEO_PARSER_VERSION, metric='Marketplace price',
+                             value=catalog['offer_amount'], unit=catalog['offer_currency'],
+                             market='US', observed_at=collected['observed_at'][:10],
+                             source_url=collected['source_url'],
+                             method='Amazon ASIN live advanced: current offer supplied by provider',
+                             notes='Current offer only; not sales or price history.')
+                if catalog.get('rating_votes') is not None:
+                    evidence('catalog', 'DataForSEO Amazon API', snap, collected_at,
+                             settings.dataforseo_retention_days, DATAFORSEO_COLLECTOR_VERSION,
+                             DATAFORSEO_PARSER_VERSION, metric='Marketplace review count',
+                             value=catalog['rating_votes'], unit='reviews', market='US',
+                             observed_at=collected['observed_at'][:10],
+                             source_url=collected['source_url'],
+                             method='Current cumulative review count supplied by provider',
+                             notes='A count is not review velocity; repeat observations are required.')
+                return ('Resolved the exact ASIN and stored supplied catalog/current-offer fields. '
+                        'No sales, history, demand or causation was inferred.', snap.id)
+
+            catalog_result = attempt(
+                'catalog', 'Catalog identity & current offer',
+                lambda client: client.get_catalog_item(product.payload['asin']), save_catalog)
+
+            def save_search(collected):
+                snap = snapshot('search_demand', 'DataForSEO Trends', 'NG', collected,
+                                DATAFORSEO_COLLECTOR_VERSION, DATAFORSEO_PARSER_VERSION,
+                                settings.dataforseo_usage_rights,
+                                settings.dataforseo_retention_days)
+                collected_at = now()
+                evidence('search_demand', 'DataForSEO Trends', snap, collected_at,
+                         settings.dataforseo_retention_days, DATAFORSEO_COLLECTOR_VERSION,
+                         DATAFORSEO_PARSER_VERSION, metric='Search interest',
+                         value=collected.get('latest_value'), unit='relative index (0-100)',
+                         market='NG', observed_at=collected['observed_at'][:10],
+                         source_url=collected['source_url'],
+                         method='DataForSEO Trends web-interest series for Nigeria; relative, not absolute volume',
+                         notes=f"Query: {collected['query']}. Search interest is an indicator, not observed sales or attribution.",
+                         series=collected['series'])
+                return ('Stored the Nigeria relative search-interest series. It does not measure '
+                        'units sold or prove why demand changed.', snap.id)
+
+            if product.payload.get('confirmed'):
+                search_query = ((product.payload.get('discovery_context') or {}).get('query')
+                                or product.payload['name'])
+                attempt('search_demand', 'Nigeria search interest',
+                        lambda client: client.get_search_interest(search_query), save_search)
+            else:
+                p['events'] = p['events'] + [{
+                    'id':len(p['events'])+1, 'step':'Nigeria search interest',
+                    'status':'unavailable',
+                    'detail':'Search was not run because external product identity was not resolved; querying an ASIN alone would not answer product demand.',
+                    'at':now()}]
+
+            def save_local(collected):
+                ranked = match_jumia_candidates(product.payload['name'],
+                                                 ((product.payload.get('catalog') or {}).get('brand') or
+                                                  (product.payload.get('catalog') or {}).get('author')),
+                                                 collected['candidates'])
+                # Hash the original provider rows, discard them, and store only the
+                # ranked normalized candidates used by product and evidence views.
+                collected = {**collected, 'candidates':ranked}
+                snap = snapshot('local_market', 'Bright Data Jumia custom scraper', 'NG', collected,
+                                BRIGHTDATA_COLLECTOR_VERSION, BRIGHTDATA_PARSER_VERSION,
+                                settings.brightdata_jumia_usage_rights,
+                                settings.brightdata_jumia_retention_days)
+                collected_at = now()
+                likely = [candidate for candidate in ranked if candidate['match_score'] >= .25]
+                product.payload = {**product.payload, 'local_candidates':ranked[:10],
+                                   'local_candidates_observed_at':collected['observed_at'],
+                                   'local_candidates_snapshot_id':snap.id}
+                evidence('local_market', 'Bright Data Jumia custom scraper', snap, collected_at,
+                         settings.brightdata_jumia_retention_days, BRIGHTDATA_COLLECTOR_VERSION,
+                         BRIGHTDATA_PARSER_VERSION, metric='Local listing count', value=len(likely),
+                         unit='candidate listings in collected result', market='NG',
+                         observed_at=collected['observed_at'][:10], source_url=collected['source_url'],
+                         method='One Jumia Nigeria query; deterministic title/brand token candidate matching',
+                         notes=(f'{len(ranked)} listings returned; {len(likely)} met the 0.25 candidate threshold. '
+                                'This is not total-market coverage and every match requires human review.'))
+                for candidate in likely[:5]:
+                    if isinstance(candidate.get('price'), (int, float)):
+                        evidence('local_market', 'Bright Data Jumia custom scraper', snap, collected_at,
+                                 settings.brightdata_jumia_retention_days,
+                                 BRIGHTDATA_COLLECTOR_VERSION, BRIGHTDATA_PARSER_VERSION,
+                                 metric='Local listing price', value=candidate['price'],
+                                 unit=candidate.get('currency') or 'NGN', market='NG',
+                                 observed_at=collected['observed_at'][:10],
+                                 source_url=candidate['url'],
+                                 method='Jumia listing returned by custom scraper; candidate match only',
+                                 notes=f"Candidate match score {candidate['match_score']:.3f}; human review required.")
+                return (f'Stored {len(ranked)} Jumia result(s), including {len(likely)} candidate match(es). '
+                        'Coverage is one query on one marketplace; candidates are not confirmed equivalents.', snap.id)
+
+            if product.payload.get('confirmed'):
+                attempt('local_market', 'Jumia Nigeria listing candidates',
+                        lambda client: client.search(product.payload['name']), save_local)
+            else:
+                p['events'] = p['events'] + [{
+                    'id':len(p['events'])+1, 'step':'Jumia Nigeria listing candidates',
+                    'status':'unavailable', 'detail':'Local matching was not run because external product identity was not resolved.',
+                    'at':now()}]
+
+            def save_fx(collected):
+                snap = snapshot('fx', 'Open Exchange Rates', 'GLOBAL', collected,
+                                OXR_COLLECTOR_VERSION, OXR_PARSER_VERSION,
+                                settings.open_exchange_rates_usage_rights,
+                                settings.open_exchange_rates_retention_days)
+                collected_at = now()
+                evidence('fx', 'Open Exchange Rates', snap, collected_at,
+                         settings.open_exchange_rates_retention_days, OXR_COLLECTOR_VERSION,
+                         OXR_PARSER_VERSION, metric='FX reference rate', value=collected['usd_ngn'],
+                         unit='NGN per USD', market='GLOBAL',
+                         observed_at=collected['observed_at'][:10], source_url=collected['source_url'],
+                         method='USD-base latest endpoint; market reference rate',
+                         notes='Reference rate only, not a CBN regulatory rate or guaranteed settlement rate.')
+                product.payload = {**product.payload, 'fx_reference': {
+                    'usd_ngn':collected['usd_ngn'], 'usd_cny':collected['usd_cny'],
+                    'cny_ngn_calculated':collected['usd_ngn'] / collected['usd_cny'],
+                    'observed_at':collected['observed_at'], 'snapshot_id':snap.id,
+                    'truth_state':'Observed',
+                    'calculation':'CNY/NGN = provider USD/NGN ÷ provider USD/CNY'}}
+                return ('Stored dated USD/NGN and USD/CNY reference rates. CNY/NGN is explicitly calculated; '
+                        'Decision Room inputs remain user-approved assumptions.', snap.id)
+
+            attempt('fx', 'Reference FX', lambda client: client.latest(), save_fx)
+
             p['status'] = 'partial'
             if product.payload.get('confirmed'):
-                identity_detail = 'Product identity was resolved by the authorised catalog source. Demand and destination evidence remain separate gates.'
+                identity_detail = ('Product identity was resolved by the authorised catalog source. '
+                                   'Demand, destination, freight, observed sales and regulatory evidence remain separate gates.')
                 identity_status = 'succeeded'
             else:
                 identity_detail = 'Identifier captured. Confirm the product name; source identity and demand remain unverified.'
@@ -1519,8 +2045,65 @@ def create_app(settings=None):
             raise HTTPException(409,'Idempotency key was used for a different request.')
         return serialize(existing)
 
+    @app.post('/api/v1/discovery', status_code=202)
+    def discover(payload: DiscoveryRequest, background: BackgroundTasks,
+                 idempotency_key: str | None=Header(default=None),
+                 user=Depends(writer), db=Depends(get_db)):
+        request_hash = hashlib.sha256(json.dumps(
+            payload.model_dump(), sort_keys=True).encode()).hexdigest()
+        key = idempotency_key or request_hash
+        if len(key) > 128:
+            raise HTTPException(422, 'Idempotency key is too long.')
+        existing = records(db,user,'discovery').filter_by(key=key).first()
+        if existing:
+            if existing.payload['request_hash'] != request_hash:
+                raise HTTPException(409, 'Idempotency key was used for a different request.')
+            return serialize(existing)
+        row, created = insert_unique(db,user,'discovery',key,{
+            'status':'queued', 'source_id':'catalog', 'truth_state':'Unavailable',
+            'query':payload.query, 'limit':payload.limit, 'requested_by':user.id,
+            'request_hash':request_hash, 'candidates':[],
+            'detail':'Waiting for the configured current Amazon product source.',
+        })
+        if not created:
+            if row.payload['request_hash'] != request_hash:
+                raise HTTPException(409, 'Idempotency key was used for a different request.')
+            db.commit()
+            return serialize(row)
+        consume(db, f'research:{user.workspace_id}:{now()[:10]}',
+                settings.research_daily_limit)
+        background.add_task(run_discovery, row.id, user.workspace_id)
+        return serialize(row)
+
+    @app.get('/api/v1/discovery/{discovery_id}')
+    def discovery(discovery_id: str, user=Depends(permitted('workspace.read')),
+                  db=Depends(get_db)):
+        return serialize(owned(db,user,'discovery',discovery_id))
+
     def queue_job(payload, db, user, background, idempotency_key):
         identity = resolve_input(payload.input)
+        discovery_context = None
+        if payload.discovery_id:
+            discovery_row = owned(db, user, 'discovery', payload.discovery_id)
+            if discovery_row.payload.get('status') != 'succeeded':
+                raise HTTPException(409, 'This discovery run did not produce selectable candidates.')
+            selected = next((candidate for candidate in discovery_row.payload.get('candidates', [])
+                             if candidate.get('asin') == identity['asin']), None)
+            if not selected:
+                raise HTTPException(422, 'The selected ASIN is not a candidate in this discovery run.')
+            discovery_context = {
+                'discovery_id': discovery_row.id,
+                'snapshot_id': discovery_row.payload.get('snapshot_id'),
+                'query': discovery_row.payload.get('query'),
+                'selected_asin': selected['asin'],
+                'selected_title': selected.get('title'),
+                'selected_position': selected.get('absolute_position') or selected.get('position'),
+                'selected_at': now(),
+                'match_state': 'candidate_selected',
+                'limitations': ('Selection came from a current organic keyword result. '
+                                'The catalog collection must still resolve the exact ASIN; '
+                                'ranking is not a recommendation or evidence of sales.'),
+            }
         request_hash = hashlib.sha256(json.dumps(payload.model_dump(),sort_keys=True).encode()).hexdigest()
         key = idempotency_key or request_hash
         if len(key)>128: raise HTTPException(422,'Idempotency key is too long.')
@@ -1528,10 +2111,16 @@ def create_app(settings=None):
         if existing:
             return matching_job(existing, request_hash)
         canonical, _ = insert_unique(db,user,'product',identity['asin'],{'name':f"Amazon product · {identity['asin']}", 'asin':identity['asin'], 'source_url':identity['url'], 'market':'NG','discovery_market':'US','confirmed':False,'truth_state':'User input','decision':'INSUFFICIENT EVIDENCE','confidence':0,'category':'Unclassified','stage':'Needs evidence','blocker':'Confirm product identity and connect a demand source.','observations':[]})
+        if discovery_context:
+            canonical.payload = {**canonical.payload, 'discovery_context': discovery_context}
+        capture_event = ({'id':1, 'step':'Keyword candidate selected', 'status':'succeeded',
+                          'detail':discovery_context['limitations'], 'at':now()}
+                         if discovery_context else
+                         {'id':1,'step':'Amazon identifier captured','status':'succeeded',
+                          'detail':'Parsed from your input. No external page was fetched yet.','at':now()})
         job, created = insert_unique(db,user,'job',key,{'status':'queued','product_id':canonical.id,
             'requested_by':user.id,'request_hash':request_hash,
-            'events':[{'id':1,'step':'Amazon identifier captured','status':'succeeded',
-                       'detail':'Parsed from your input. No external page was fetched yet.','at':now()}]})
+            'discovery_context': discovery_context, 'events':[capture_event]})
         if not created:
             # A concurrent request with the same key won. Converge on its job and do not
             # charge the research entitlement twice for one logical submission.

@@ -72,6 +72,29 @@ class Settings:
     amazon_creators_marketplace: str = 'www.amazon.com'
     amazon_creators_usage_rights: str = ''
     amazon_creators_timeout_seconds: float = 12.0
+    #: The live pilot uses commercial research feeds only after an operator records the
+    #: applicable accepted terms, plan, and intended-use basis. Published terms may
+    #: establish permission; this field is evidence of that basis, not a made-up demand
+    #: for separate written approval. A key without it is intentionally misconfigured.
+    dataforseo_enabled: bool = False
+    dataforseo_login: str = ''
+    dataforseo_password: str = ''
+    dataforseo_usage_rights: str = ''
+    dataforseo_catalog_location_code: int = 2840
+    dataforseo_trends_location_code: int = 2566
+    dataforseo_retention_days: int = 30
+    dataforseo_timeout_seconds: float = 15.0
+    brightdata_jumia_enabled: bool = False
+    brightdata_api_token: str = ''
+    brightdata_jumia_dataset_id: str = ''
+    brightdata_jumia_usage_rights: str = ''
+    brightdata_jumia_retention_days: int = 30
+    brightdata_timeout_seconds: float = 65.0
+    open_exchange_rates_enabled: bool = False
+    open_exchange_rates_app_id: str = ''
+    open_exchange_rates_usage_rights: str = ''
+    open_exchange_rates_retention_days: int = 365
+    open_exchange_rates_timeout_seconds: float = 12.0
     #: Actionable import review stays unavailable in production until Product names the
     #: qualified category/jurisdiction scope. Development/test defaults keep the workflow
     #: exercisable; production from_env defaults it off and requires an approval reference.
@@ -190,6 +213,22 @@ class Settings:
         if amazon_timeout < 1 or amazon_timeout > 60:
             raise ValueError('AMAZON_CREATORS_TIMEOUT_SECONDS must be between 1 and 60')
 
+        def bounded_int(name, default, minimum, maximum):
+            value = int(os.getenv(name, str(default)))
+            if value < minimum or value > maximum:
+                raise ValueError(f'{name} must be between {minimum} and {maximum}')
+            return value
+
+        def timeout(name, default):
+            value = float(os.getenv(name, str(default)))
+            if value < 1 or value > 120:
+                raise ValueError(f'{name} must be between 1 and 120')
+            return value
+
+        dataforseo_retention = bounded_int('DATAFORSEO_RETENTION_DAYS', 30, 1, 3650)
+        brightdata_retention = bounded_int('BRIGHTDATA_JUMIA_RETENTION_DAYS', 30, 1, 3650)
+        oxr_retention = bounded_int('OPEN_EXCHANGE_RATES_RETENTION_DAYS', 365, 1, 3650)
+
         import_review_enabled = enabled(
             'IMPORT_REVIEW_ENABLED', 'false' if env == 'production' else 'true')
         import_review_policy_ref = os.getenv('IMPORT_REVIEW_POLICY_REF', '').strip()
@@ -222,5 +261,27 @@ class Settings:
             amazon_creators_marketplace=amazon_marketplace,
             amazon_creators_usage_rights=os.getenv('AMAZON_CREATORS_USAGE_RIGHTS', '').strip(),
             amazon_creators_timeout_seconds=amazon_timeout,
+            dataforseo_enabled=enabled('DATAFORSEO_ENABLED', 'false'),
+            dataforseo_login=os.getenv('DATAFORSEO_LOGIN', '').strip(),
+            dataforseo_password=os.getenv('DATAFORSEO_PASSWORD', ''),
+            dataforseo_usage_rights=os.getenv('DATAFORSEO_USAGE_RIGHTS', '').strip(),
+            dataforseo_catalog_location_code=bounded_int(
+                'DATAFORSEO_CATALOG_LOCATION_CODE', 2840, 1, 9999999),
+            dataforseo_trends_location_code=bounded_int(
+                'DATAFORSEO_TRENDS_LOCATION_CODE', 2566, 1, 9999999),
+            dataforseo_retention_days=dataforseo_retention,
+            dataforseo_timeout_seconds=timeout('DATAFORSEO_TIMEOUT_SECONDS', 15),
+            brightdata_jumia_enabled=enabled('BRIGHTDATA_JUMIA_ENABLED', 'false'),
+            brightdata_api_token=os.getenv('BRIGHTDATA_API_TOKEN', ''),
+            brightdata_jumia_dataset_id=os.getenv('BRIGHTDATA_JUMIA_DATASET_ID', '').strip(),
+            brightdata_jumia_usage_rights=os.getenv('BRIGHTDATA_JUMIA_USAGE_RIGHTS', '').strip(),
+            brightdata_jumia_retention_days=brightdata_retention,
+            brightdata_timeout_seconds=timeout('BRIGHTDATA_TIMEOUT_SECONDS', 65),
+            open_exchange_rates_enabled=enabled('OPEN_EXCHANGE_RATES_ENABLED', 'false'),
+            open_exchange_rates_app_id=os.getenv('OPEN_EXCHANGE_RATES_APP_ID', ''),
+            open_exchange_rates_usage_rights=os.getenv(
+                'OPEN_EXCHANGE_RATES_USAGE_RIGHTS', '').strip(),
+            open_exchange_rates_retention_days=oxr_retention,
+            open_exchange_rates_timeout_seconds=timeout('OPEN_EXCHANGE_RATES_TIMEOUT_SECONDS', 12),
             import_review_enabled=import_review_enabled,
             import_review_policy_ref=import_review_policy_ref)

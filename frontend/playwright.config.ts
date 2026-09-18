@@ -59,7 +59,9 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: [
     {
-      command: `${PYTHON} -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port ${API_PORT}`,
+      // The factory injects local deterministic provider fixtures. No external request is
+      // made, and browser results from this stack are never live-data proof.
+      command: `${PYTHON} -m uvicorn tests.e2e_app:create_e2e_app --factory --host 127.0.0.1 --port ${API_PORT}`,
       cwd: '../backend',
       url: `http://127.0.0.1:${API_PORT}/api/health`,
       reuseExistingServer: false,

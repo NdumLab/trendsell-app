@@ -29,9 +29,13 @@ def test_the_job_never_reports_a_source_that_did_not_run(client, owner):
     assert job['status'] == 'partial'
     steps = {event['step']: event['status'] for event in job['events']}
     assert steps['Amazon identifier captured'] == 'succeeded'
-    assert steps['Amazon catalog'] == 'unavailable'
-    assert steps['Google Trends'] == 'unavailable'
-    assert 'succeeded' not in [steps['Amazon catalog'], steps['Google Trends']]
+    assert steps['Catalog identity & current offer'] == 'unavailable'
+    assert steps['Nigeria search interest'] == 'unavailable'
+    assert steps['Jumia Nigeria listing candidates'] == 'unavailable'
+    assert steps['Reference FX'] == 'unavailable'
+    assert 'succeeded' not in [steps['Catalog identity & current offer'],
+                               steps['Nigeria search interest'],
+                               steps['Jumia Nigeria listing candidates'], steps['Reference FX']]
     for event in job['events']:
         assert event['detail'] and event['at']
 
@@ -99,12 +103,19 @@ def test_evidence_and_timeline_report_unavailable_rather_than_empty_success(clie
         assert body['reason']
 
 
-def test_data_health_reports_every_source_as_unconfigured(client, owner):
+def test_data_health_reports_explicit_configuration_collection_storage_and_api_states(client, owner):
     body = client.get('/api/v1/data-health').json()
     assert body['coverage'] is None
     assert body['sources']
     for source in body['sources']:
-        assert source['status'] == 'unconfigured'
+        assert source['adapter_state'] in {'implemented', 'not_implemented'}
+        expected_configuration = 'disabled' if source['adapter_state'] == 'implemented' else 'not_applicable'
+        assert source['configuration_state'] == expected_configuration
+        assert source['collection_state'] == 'never_attempted'
+        assert source['observation_state'] == 'none'
+        assert source['stored_observation_count'] == 0
+        assert source['api_availability_state'] == 'unavailable'
+        assert 'status' not in source and 'display_status' not in source
         assert source['last_success'] is None
         assert source['reason'] and source['rights']
 

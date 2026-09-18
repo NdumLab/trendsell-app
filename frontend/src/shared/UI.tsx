@@ -39,7 +39,7 @@ const METRIC_NOTES: Record<string,{what:string;limits:string}> = {
 };
 const DEFAULT_NOTE={what:'This value was recorded against one metric, market, and moment in time.',limits:'Read it with its source, window, and unit. A single observation is not a trend, and a trend is not a cause.'};
 const PRODUCED: Record<string,string> = {
- Observed:'Returned directly by the named source and stored with its raw snapshot.',
+ Observed:'Returned directly by the named source and stored with a hashed, normalized source snapshot.',
  Calculated:'Derived from observations by a versioned formula. Its inputs are listed in the lineage.',
  Estimated:'Inferred from partial evidence. Treat the range, not the midpoint, as the answer.',
  'User input':'Entered by someone in this workspace. TrendSell stores it separately from observed facts.',
@@ -57,7 +57,7 @@ export function EvidenceDrawer({observation,onClose}:{observation:Observation|nu
   <div className="evidence-quality"><div><small>Confidence</small><strong>{observation.confidence}<span>/ 100</span></strong></div><div><small>Window coverage</small><strong>{series?`${collected}`:'—'}<span>{series?`of ${series.length} points`:'single observation'}</span></strong></div><div><small>Observed</small><strong>{relativeTime(observation.observed_at)}<span>{observation.market} · {observation.unit}</span></strong></div></div>
   {series&&collected<series.length&&<p className="evidence-gap">{series.length-collected} point{series.length-collected===1?'':'s'} in this window {series.length-collected===1?'has':'have'} no observation. Missing points are left as gaps and are never interpolated.</p>}
   <div className="explanation"><h4>How this value was produced</h4><p>{PRODUCED[observation.truth_state]}</p></div>
-  <dl className="metadata">{[['Source',observation.source],['Market',observation.market],['Unit',observation.unit],['Observed at',dateTime(observation.observed_at)],['Fetched at',dateTime(observation.fetched_at)],['Observation ID',observation.id],['Snapshot',observation.snapshot_id],['Collector version',observation.collector_version],['Parser version',observation.parser_version],['Usage rights',observation.usage_rights]].map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+  <dl className="metadata">{[['Source',observation.source_name??observation.source],['Market',observation.market],['Unit',observation.unit],['Observed at',dateTime(observation.observed_at)],['Fetched at',dateTime(observation.fetched_at)],['Expires at',dateTime(observation.expires_at)],['Observation ID',observation.id],['Snapshot',observation.snapshot_id],['Collector version',observation.collector_version],['Parser version',observation.parser_version],['Usage basis',observation.usage_rights]].map(([label,value])=><div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
   {observation.source_url&&<a href={observation.source_url} target="_blank" rel="noreferrer" className="button secondary full">{observation.truth_state==='Demo'?'Open source homepage':'Open original source'}<ExternalLink size={15}/></a>}
   <div className="explanation"><h4>What this tells you</h4><p>{note.what}</p></div>
   <div className="explanation"><h4>What it cannot tell you</h4><p>{note.limits}</p></div>

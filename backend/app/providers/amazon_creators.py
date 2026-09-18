@@ -13,6 +13,8 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .common import ProviderError
+
 
 COLLECTOR_VERSION = 'amazon-creators/get-items/1.0.0'
 PARSER_VERSION = 'amazon-creators-item/1.0.0'
@@ -36,16 +38,6 @@ RESOURCES = [
     'browseNodeInfo.websiteSalesRank',
     'browseNodeInfo.browseNodes.salesRank',
 ]
-
-
-class ProviderError(RuntimeError):
-    """A safe error classification suitable for UI/job history."""
-
-    def __init__(self, code: str, detail: str, retry_after: str = 'Manual retry'):
-        super().__init__(detail)
-        self.code = code
-        self.detail = detail
-        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
