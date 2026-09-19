@@ -59,7 +59,7 @@ passes in production.
 | I03 | Hardened service templates include distinct migration and monitor identities | `E` — install/diff/verify, restart and reboot on approved staging/target hosts |
 | I04 | Synthetic-data-only staging proposal is documented | `H` — Engineering/Platform funds/names staging; Security/Privacy approves topology, access and data-handling rule |
 | I05 | No unapproved load claim added | `H` — Product/Platform approves normal/peak users, requests, records, jobs and success/headroom targets |
-| I06 | SMTP/collectors remain explicit opt-ins | `H` — accountable owners approve provider accounts, terms, region, quota/budget, expiry and contacts |
+| I06 | SMTP and selected live collectors remain explicit server-side opt-ins; adapter/configuration/collection/stored-observation/API states are distinct and browser display is verified separately | `H` — accountable owners approve accounts, accepted terms/plan/intended-use bases, region, quota/budget, expiry and contacts; Bright Data compliance accepts the declared `jumia.com.ng` use; then `E` — authorized real collection and browser-display evidence |
 | I07 | Exact checksum/manifest staging, atomic activation and drift-resistant paths are implemented | `E` — exact CI artifact deploy log and configuration comparison from production-like staging |
 | D01 | Recovery proposals are in the decision sheet | `H` — named Product, Platform and Operations owners approve RPO/RTO, scope and retention |
 | D02 | Backup age/integrity is included in persistent monitoring; deletion sync has a path plus reconciliation timer | `E` — bucket TLS/Public Access Block/IAM/lifecycle proof and a delivered absence/failure alert |
@@ -81,13 +81,13 @@ passes in production.
 | P01 | Repository data map can incorporate new pseudonymous deletion and monitor state | `H` — Product/Security/Privacy approves deployed locations, purposes, access and retention |
 | P02 | Product surfaces expose actual disabled/recovery state | `H` — Product/Privacy approves and publishes versioned notice plus delivery/acceptance record |
 | P03 | Every retention is configurable or proposed; no policy is asserted as approved | `H` — Product/Privacy/Operations approves numeric schedule and deletion wording; expiry tests follow |
-| P04 | External collector remains off; manual provenance remains explicit | `H` — Product/Privacy or counsel approves manual-source permitted use and provider exclusions |
+| P04 | Selected collectors are implemented but remain off; manual provenance remains explicit and cannot count as collection | `H` — Product/Privacy or counsel approves each provider’s internal research, user display, derived-metric and retention rights plus manual-source permitted use |
 | P05 | Existing limitations/appeal drafts remain inputs only | `H` — accountable Product/Privacy/counsel approves terms, prohibited use and complaint/appeal route |
 | P06 | No vendor approval fabricated | `H` — Security/Privacy/Procurement approves Resend/S3 terms, locations, contacts and required agreements |
 | P07 | Procedure and log template exist | `H` — named lawful-notification/data-request owners approve them; tabletop/response record follows |
 | T01 | Public config/UI now exposes feature truth and import-review exclusion | `H` — Product and independent reviewer sign exact UI/API/export/marketing claim inventory |
 | T02 | Manual evidence cap and unavailable capabilities remain enforced/disclosed | `H` — Product approves pilot agreement/notice and participant comprehension protocol |
-| T03 | Collector remains disabled/inaccessible | `N` — Product and independent reviewer approve constrained T02 pilot and collector exclusion |
+| T03 | Live collection is now required product scope; production still has no selected collector or observation | `E` — after provider rights/budget approval, exact-candidate staging and bounded production investigations display real catalog, Nigeria demand/local-market and FX provenance; independent reviewer verifies no demo/manual/auth-only substitution |
 | T04 | Production defaults import review off; API returns 404, UI fails closed, old records cannot clear the gate | `H` — Product/domain owner approves exclusion; independent reviewer verifies it, or qualified review scope must be supplied |
 | T05 | Contract/replay tests remain; no substantive methodology approval inferred | `H` — Product and methodology owner approves corridor, formulas, units, assumptions, coverage and blind spots |
 | T06 | Usability is not fabricated by automated browser tests | `E` — after cohort approval, five representative users complete the supervised protocol and findings are dispositioned |

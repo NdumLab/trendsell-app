@@ -36,7 +36,7 @@ Every value carries a truth state, and the interface shows it beside the number:
 
 | State | Meaning |
 | --- | --- |
-| **Observed** | Returned by a named source, stored with a raw snapshot |
+| **Observed** | Returned by a named source, stored with a normalized snapshot and response hash |
 | **Calculated** | Deterministic transformation of observed or user-provided inputs, with a formula version |
 | **Estimated** | Inferred from partial evidence, shown as a range with its method |
 | **User input** | Entered by someone in the workspace, stored separately from observed facts |
@@ -52,27 +52,27 @@ Consequences that are enforced, not aspirational:
 - `GO` requires compliance resolved **by a reviewer** and confidence ≥ 70, regardless of how good the margin looks.
 - Confidence is an evidence-coverage score, not a probability, and every component of it is shown.
 - Evidence you type is user input: it counts, but it is capped below the confidence a `GO` needs.
-  Only a connected, authorised collector can raise it further. The Amazon Creators API adapter is
-  implemented, but remains disabled unless Amazon explicitly approves this internal research use
-  and durable evidence retention; standard Associates cache permissions are insufficient.
+  Only a connected, authorised collector can raise it further. Selected commercial adapters remain
+  disabled until provider credentials and a recorded accepted-terms/plan/intended-use basis are
+  installed; configured keys, authentication and fixtures do not count as live collection.
 
 ## What is in the pilot
 
 | Area | State |
 | --- | --- |
-| Product X-Ray | Amazon US URL or ASIN → identifier capture and research job. With authorised Amazon Creators API configuration, GetItems resolves current identity and only returned catalog fields; otherwise user confirmation remains available and clearly labelled |
-| Evidence ledger | Record dated evidence yourself — metric, market, source, method, author. Stored as **User input**, never as an observation. Authorised catalog responses are stored separately as **Observed**, with collection time, source market, snapshot, parser/collector versions and usage-rights label |
+| Product X-Ray | Amazon US URL, ASIN or keyword → candidate selection → exact-ASIN resolution and a user-requested multi-source job. When separately authorised, DataForSEO resolves exact-ASIN identity/current offer and Nigeria search interest, Bright Data supplies Jumia candidate listings, and Open Exchange Rates supplies dated reference pairs. A keyword candidate is not a confirmed exact product match; unavailable sources remain unavailable |
+| Evidence ledger | Manual records remain **User input**. Authorised provider responses are separately **Observed**, with source/check URL, provider and collection time, snapshot/hash, parser/collector versions, use-rights reference and expiry |
 | Sales drivers | Product-level advertising, creator, search and marketplace evidence. Signals are presented as association, never causal attribution; absent spend, ROAS, revenue, seller count and sales history stay unavailable |
 | Evidence coverage | A versioned, explainable score (`evidence-quality/1.1.0`) with a component-by-component breakdown. Self-reported evidence is capped below the confidence a GO needs |
 | Import readiness | Request a review, and a workspace reviewer approves, rejects or asks for more. An approval cites its official sources and expires. A dropdown cannot clear this gate |
 | Decision Room | Editable unit economics, three scenarios, cost waterfall, sensitivity, saved assessments. A dated supplier quote can populate MOQ/cost and is snapshotted with explicit non-USD conversion. Coverage, confidence and compliance come from the server, not the browser |
 | Watchlist | Saved watches and materiality thresholds. Scheduled collection and delivery are **not** enabled, and the screen says so |
 | Suppliers | User-recorded quotes preserving original amount, currency, MOQ, terms, date, source and author; RFQ drafts are not sent on your behalf |
-| Data Health | Every source, its status, rights, freshness target and reason for being unavailable |
+| Data Health | Every required source, with typed adapter, configuration, collection, stored-observation and API-availability states. The API never claims browser display; browser tests and an authorised real-data check prove that separately |
 | Market Gaps | Corridor view that reports insufficient evidence rather than an untapped opportunity |
 
-Not enabled in the current deployment, and not implied where unavailable: authorised live
-catalog access, scheduled monitoring, alert delivery, billing, evidence-file attachments,
+Not enabled in the current production deployment, and not implied where unavailable: authorised
+live catalog/search/Jumia/FX access, scheduled monitoring, alert delivery, billing, evidence-file attachments,
 and image, video or keyword
 capture. Password reset/change, session management, email verification, owner-managed team
 invitations and member removal have browser screens. The release includes a TLS-enforced SMTP
@@ -80,14 +80,20 @@ transport, but a deployment still needs an approved provider, sending identity, 
 authentication and delivery monitoring before those messages can reach real inboxes. See
 [permissions, privacy and retention](docs/PRIVACY_AND_PERMISSIONS.md).
 
-Image, video and keyword capture, scheduled collection, alerts and Creative DNA are later phases.
+See the current [source feasibility and access register](docs/releases/2026-09-17-live-data-feasibility.md)
+and [proposed live-data pilot](docs/releases/2026-09-17-live-data-pilot.md). TrendSell is not
+live-data ready until real observations have been collected and displayed in production.
+
+Image/video capture, scheduled collection, alerts and Creative DNA are later phases. Keyword
+discovery is implemented for the selected DataForSEO pilot but remains disabled without access.
 Follow [docs/ACTION_PLAN.md](docs/ACTION_PLAN.md) for implementation order.
 `TrendSell_Complete_Redesign_Plan-1.docx` remains the broader product-vision reference.
 
 Workspace export schema `trendsell-workspace-export/3` includes catalog source snapshots,
 workspace-scoped source health, original-currency quotes, and quote snapshots/conversions on
-saved decisions. Older saved assessments remain immutable under their stored formula,
-threshold, and evidence versions.
+saved decisions. Older saved assessments retain immutable formula inputs, calculations and
+versions. Provider evidence payloads are removed at expiry and replaced in historical assessments
+by explicit retention tombstones, so an expired observation cannot continue to appear usable.
 
 ## Architecture
 

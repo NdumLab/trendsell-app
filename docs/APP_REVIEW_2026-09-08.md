@@ -166,7 +166,7 @@ The deployed site has CSP, HSTS, frame protection, secure-cookie configuration, 
 
 | Addition | Reason |
 | --- | --- |
-| One approved demand collector with immutable raw snapshots and normalized observations | Supplies the currently missing foundation for timelines, freshness, and evidence confidence |
+| One approved demand collector with response hashes, retained normalized snapshots and expiry-aware observations | Supplies the currently missing foundation for timelines, freshness, and evidence confidence without retaining raw provider payloads indefinitely |
 | A way to attach dated manual evidence and record review decisions | Gives users a path forward while connectors are incomplete; user submissions must retain their own truth state |
 | A reviewed compliance workflow | The real API always uses absent evidence and never resolves compliance; favorable economics alone can currently produce neither GO nor WATCH |
 | “Use this quote in Decision Room” with a quote/version reference | Quotes currently sit beside the calculator without feeding it; preserve currency, MOQ, date, validity, and Incoterm context |
