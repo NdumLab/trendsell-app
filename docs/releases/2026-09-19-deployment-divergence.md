@@ -80,3 +80,10 @@ Reconcile in one of two directions. This requires a named Engineering/Platform o
   be atomic, because a directory swap is several operations.
 
 Neither may be applied to production before the staging gate (`I04`) has a named owner and host.
+
+**Recorded direction (19 September 2026):** the first option is entered on the
+[decision sheet](2026-09-16-decision-sheet.md) as the recommended proposal. It is a proposal only.
+No named Engineering/Platform owner has selected it, no staging host exists to rehearse it on, and
+nothing in `/opt/trendsell` has been changed. Until that owner exists, the guard in
+`scripts/deploy_release.sh` is the whole of the mitigation: deployments fail loudly instead of
+silently, and the host remains undeployable by the documented procedure.
