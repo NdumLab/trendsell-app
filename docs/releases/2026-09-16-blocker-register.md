@@ -26,9 +26,9 @@ Each blocked gate has one primary remaining dependency, even where later depende
 
 | Class | Meaning | Count |
 | --- | --- | ---: |
-| `E` | A particular environment, credential, mailbox, provider, target host or independent exercise is required | 15 |
+| `E` | A particular environment, credential, mailbox, provider, target host or independent exercise is required | 16 |
 | `H` | A named accountable human must choose scope/targets/owners or approve policy/risk | 38 |
-| `N` | A named applicability owner must approve the proposed N/A and an independent reviewer must verify the exclusion | 7 |
+| `N` | A named applicability owner must approve the proposed N/A and an independent reviewer must verify the exclusion | 6 |
 | **Total** | Unique blocked gates | **60** |
 
 “Implemented/tested locally” below is capability evidence only. It never means the complete gate
@@ -159,3 +159,11 @@ blocked state rather than an assumed one, and the `I07`/`D05` implementation not
 "atomic current/previous links ... and application rollback" — is capability evidence only and is
 **not** reflected in the installed system. Any prior confidence that a rollback path existed in
 production is withdrawn.
+
+### Class count correction (19 September 2026 UTC)
+
+The class totals above originally read `E` 15 and `N` 7. Counted from the gate rows themselves the
+split is `E` 16 and `N` 6: the sixteen `E` gates are `R06`, `F01`, `S02`, `S03`, `S05`, `I02`,
+`I03`, `I07`, `D02`, `D04`, `D05`, `O04`, `O05`, `A04`, `T03` and `T06`, and the six `N` gates are
+`D06` and `C01`–`C05`. `H` was correct at 38 and the blocked total was correct at 60, so no gate
+changed state and no headline figure moves. One gate had been counted against the wrong class.
