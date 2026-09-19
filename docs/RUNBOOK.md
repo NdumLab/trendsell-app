@@ -256,6 +256,13 @@ Missing or failed delivery is retained as evidence and makes the one-shot fail.
 
 ## Exact-artifact staging, activation and rollback
 
+> **The current production installation does not use this layout.** It is flat
+> (`/opt/trendsell/backend`), has no `releases/`, `current` or `previous` paths, and runs from
+> `venv-ae3742d` rather than `venv`. `scripts/deploy_release.sh` now refuses to run there, before
+> staging or migration. Steps 6 and 7 below therefore cannot be executed against production today.
+> See [`releases/2026-09-19-deployment-divergence.md`](releases/2026-09-19-deployment-divergence.md)
+> for the evidence and the open reconciliation decision.
+
 `scripts/deploy_release.sh` requires the full approved commit, its CI archive and checksum, separate
 runtime/migration URLs, a verified-backup latch and an approval latch equal to the commit. The
 release manager rejects path traversal, links/special files, manifest/commit mismatch and a staged
@@ -300,7 +307,8 @@ database revision, stop threshold and smoke results. None of these commands auth
    migration, schema/privilege checks, atomic activation, restart and readiness rollback.
    Do not separately unpack or rebuild the archive on the target.
 7. Confirm `current` resolves to the approved SHA, `previous` still resolves to the recorded
-   rollback application, and `/api/ready` returns 200.
+   rollback application, and `/api/ready` returns 200. On a host without those links this step
+   cannot be performed and the release is not deployable by this procedure.
 8. Verify the installed Uvicorn command includes `--no-access-log` and nginx uses
    `trendsell_safe`; make a request containing a disposable marker and confirm the marker,
    raw path, query and client address do not enter the application or access logs.
@@ -315,6 +323,10 @@ still run against the new schema for the length of a rollback window.
 * **Application only** (schema compatible): use the release manager's recorded `previous`
   target and restart the service. The deploy script performs this switch automatically on a
   failed readiness probe. Compatibility must have been proved in staging before release.
+  **Not available on the current production installation**, which records its rollback copy as
+  `.pre-<commit>-<timestamp>` sibling directories written by an unversioned procedure. Restoring
+  those is a manual, unrehearsed operation; treat it as untested until the reconciliation
+  decision is taken and a drill is recorded.
 * **Schema change went wrong**: restore the pre-release backup into a *new* database, point
   the service at it, and verify with `python -m app.migrate check` and `/api/ready`. Do not
   downgrade in place.

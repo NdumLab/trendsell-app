@@ -117,3 +117,45 @@ passes in production.
 
 These changes deliberately do not provision infrastructure, change production, send an alert or
 mail, appoint an owner, approve a policy, or satisfy independent review.
+
+## Reattachment to candidate `d15ff395` (19 September 2026 UTC)
+
+This register was prepared against work following documentation commit `5051f5d`, before that
+work was committed. The successor code candidate now exists and this section reattaches the
+register to it. No gate state improves as a result.
+
+| Item | Value |
+| --- | --- |
+| Candidate | `d15ff395c8c437c2a6f5c3277577bdc9065c4052` |
+| Remote CI | run `35409486282`, success, 2026-09-19T00:28:46Z, branch `impl/evidence-platform-phase0` |
+| Baseline | Unchanged: 69 mandatory gates, 60 blocked (`E` 15, `H` 38, `N` 7) |
+
+### Prior PASS evidence does not transfer unreviewed
+
+The nine gates recorded PASS for `ddde69a` were not re-earned by this candidate. `backend/`
+changed by 2,593 insertions and 236 deletions between `ddde69a` and `d15ff395`, including
+`backend/app/migrate.py` itself.
+
+* `F05` (exact-candidate PostgreSQL migration, restart and readiness) and `F06` (staged
+  dependency-fault exercise) are candidate-specific runtime exercises against changed migration
+  and application code. They **revert to BLOCKED** for `d15ff395` and must be re-executed.
+* `R01`, `R02`, `R03`, `F02`, `F03`, `F04` and `S08` require a recorded confirmation against the
+  `ddde69a..d15ff395` diff before they may be shown as PASS for this candidate. Until that
+  confirmation is dated and attributed, they are carried as unverified, not as PASS.
+
+Accordingly this candidate has **0 confirmed PASS gates** and 69 outstanding until the
+confirmations above are recorded. Green CI is build evidence for the candidate; it is not gate
+evidence for any of the nine.
+
+### New finding against this candidate
+
+[`2026-09-19-deployment-divergence.md`](2026-09-19-deployment-divergence.md) establishes that the
+installed production layout does not match `scripts/deploy_release.sh`, that the service and the
+script's default migration interpreter are different virtual environments, and that the procedure
+which produced the running installation is not in version control.
+
+Effect on this register: `R06` and `I03` gain a documented, evidence-backed reason for their
+blocked state rather than an assumed one, and the `I07`/`D05` implementation note above —
+"atomic current/previous links ... and application rollback" — is capability evidence only and is
+**not** reflected in the installed system. Any prior confidence that a rollback path existed in
+production is withdrawn.

@@ -31,6 +31,29 @@ if [[ "${TRENDSELL_BACKUP_VERIFIED:-}" != yes ]]; then
     echo 'refusing deployment until the pre-release backup/restore is recorded' >&2; exit 2
 fi
 
+service="${TRENDSELL_SERVICE:-trendsell}"
+
+# The installed service must actually load what this script activates, and must run
+# migrations under the interpreter it serves from. A host installed outside this layout
+# otherwise passes every latch above, migrates the database, switches links nothing reads,
+# restarts onto unchanged code and reports success. Checked against the running unit
+# rather than a documented assumption.
+if systemctl list-unit-files "$service.service" >/dev/null 2>&1; then
+    unit_dir="$(systemctl show "$service" --property=WorkingDirectory --value 2>/dev/null || true)"
+    if [[ -n "$unit_dir" && "$unit_dir" != "$current_link" && "$unit_dir" != "$current_link"/* ]]; then
+        echo "refusing deployment: $service loads $unit_dir, which is not under $current_link" >&2
+        echo 'the installed layout does not match this script; activation would not change the running code' >&2
+        exit 2
+    fi
+    unit_exec="$(systemctl show "$service" --property=ExecStart --value 2>/dev/null \
+        | sed -n 's/.*path=\([^ ]*\).*/\1/p' | head -n 1)"
+    if [[ -n "$unit_exec" && "${unit_exec%/*}" != "${python_bin%/*}" ]]; then
+        echo "refusing deployment: $service runs ${unit_exec%/*} but migrations would use ${python_bin%/*}" >&2
+        echo 'the service and its migrations must share one interpreter environment' >&2
+        exit 2
+    fi
+fi
+
 manager="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release_manager.py"
 stage_json="$($python_bin "$manager" stage --archive "$archive" \
     --expected-commit "$expected_commit" --release-root "$release_root")"

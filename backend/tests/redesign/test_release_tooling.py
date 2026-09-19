@@ -193,3 +193,81 @@ def test_secret_scan_checks_unpacked_release_content_and_redacts_value(tmp_path)
     assert result.returncode == 1
     assert 'configuration.txt' in result.stderr
     assert token not in result.stdout + result.stderr
+
+
+DEPLOY_RELEASE = REPOSITORY / 'scripts/deploy_release.sh'
+
+SYSTEMCTL_SHIM = '''
+case "$*" in
+    list-unit-files*) exit 0 ;;
+    *--property=WorkingDirectory*) printf '%s\\n' "$SHIM_UNIT_DIR" ;;
+    *--property=ExecStart*) printf '{ path=%s ; argv[]=%s --factory ; pid=0 }\\n' \\
+        "$SHIM_UNIT_EXEC" "$SHIM_UNIT_EXEC" ;;
+    *) exit 0 ;;
+esac
+'''
+
+
+def deploy_guard_environment(tmp_path, *, unit_dir, unit_exec, python_bin):
+    """Reach the installed-layout guard without touching a real service."""
+    tools = tmp_path / 'guard-bin'
+    executable(tools / 'systemctl', SYSTEMCTL_SHIM)
+    environment = os.environ.copy()
+    environment.update({
+        'PATH': f'{tools}:{environment["PATH"]}',
+        'SHIM_UNIT_DIR': str(unit_dir),
+        'SHIM_UNIT_EXEC': str(unit_exec),
+        'TRENDSELL_CURRENT_LINK': str(tmp_path / 'current'),
+        'TRENDSELL_PREVIOUS_LINK': str(tmp_path / 'previous'),
+        'TRENDSELL_RELEASE_ROOT': str(tmp_path / 'releases'),
+        'TRENDSELL_PYTHON': str(python_bin),
+        'TRENDSELL_MIGRATION_DATABASE_URL': 'postgresql://fixture/migration',
+        'TRENDSELL_RUNTIME_DATABASE_URL': 'postgresql://fixture/runtime',
+        'TRENDSELL_BACKUP_VERIFIED': 'yes',
+        'TRENDSELL_APPROVE_DEPLOY': 'f' * 40,
+    })
+    return environment
+
+
+def run_deploy_guard(tmp_path, **layout):
+    environment = deploy_guard_environment(tmp_path, **layout)
+    return run(['bash', str(DEPLOY_RELEASE), str(tmp_path / 'absent.tar.gz'), 'f' * 40],
+               cwd=tmp_path, environment=environment)
+
+
+def test_deploy_refuses_when_the_service_does_not_load_what_it_activates(tmp_path):
+    """An installation outside this layout must fail before staging or migration."""
+    result = run_deploy_guard(
+        tmp_path,
+        unit_dir='/opt/elsewhere/backend',
+        unit_exec=tmp_path / 'venv/bin/uvicorn',
+        python_bin=tmp_path / 'venv/bin/python')
+
+    assert result.returncode == 2
+    assert 'is not under' in result.stderr
+    assert 'would not change the running code' in result.stderr
+    assert not (tmp_path / 'releases').exists()
+
+
+def test_deploy_refuses_when_migrations_use_another_interpreter(tmp_path):
+    result = run_deploy_guard(
+        tmp_path,
+        unit_dir=tmp_path / 'current/backend',
+        unit_exec='/opt/other-venv/bin/uvicorn',
+        python_bin=tmp_path / 'venv/bin/python')
+
+    assert result.returncode == 2
+    assert 'must share one interpreter environment' in result.stderr
+    assert not (tmp_path / 'releases').exists()
+
+
+def test_deploy_guard_admits_a_matching_installation(tmp_path):
+    """The guard must not refuse a host the script genuinely controls."""
+    result = run_deploy_guard(
+        tmp_path,
+        unit_dir=tmp_path / 'current/backend',
+        unit_exec=tmp_path / 'venv/bin/uvicorn',
+        python_bin=tmp_path / 'venv/bin/python')
+
+    assert 'is not under' not in result.stderr
+    assert 'must share one interpreter environment' not in result.stderr
