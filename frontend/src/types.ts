@@ -105,7 +105,8 @@ export interface Source { id: string; name: string; category: string; markets: s
   last_success: string | null; last_attempt: string | null; next_retry: string; freshness_hours: number;
   adapter_state: 'implemented'|'not_implemented';
   configuration_state: 'disabled'|'missing_requirements'|'configured'|'not_applicable';
-  collection_state: 'never_attempted'|'in_progress'|'succeeded'|'failed'|'stale';
+  collection_state: 'never_attempted'|'in_progress'|'succeeded'|'failed';
+  freshness_state: 'never_succeeded'|'current'|'stale'|'invalid';
   observation_state: 'none'|'stored_current'; stored_observation_count: number;
   api_availability_state: 'unavailable'|'available';
   retention_days: number | null }

@@ -52,6 +52,7 @@ test.describe('fixture-backed keyword-to-economics integration', () => {
     const catalog = page.locator('[data-source-id="catalog"]');
     await expect(catalog).toContainText('Configurationconfigured');
     await expect(catalog).toContainText('Latest collectionsucceeded');
+    await expect(catalog).toContainText('Collection freshnesscurrent');
     await expect(catalog).toContainText('Stored observationsstored current');
     await expect(catalog).toContainText('API availabilityavailable');
     const local = page.locator('[data-source-id="local_market"]');

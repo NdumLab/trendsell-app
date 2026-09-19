@@ -1368,21 +1368,25 @@ def create_app(settings=None):
             last_success = telemetry.get('last_success')
             telemetry_state = telemetry.get('status')
             collection_state = 'never_attempted'
+            freshness_state = 'never_succeeded'
             if telemetry_state == 'collecting':
                 collection_state = 'in_progress'
             elif telemetry_state == 'degraded':
                 collection_state = 'failed'
             elif last_success:
+                # Collection outcome and freshness are separate facts. A successful
+                # collection does not become a failed/unknown collection merely because
+                # its timestamp crosses the freshness target.
                 collection_state = 'succeeded'
                 try:
                     age = datetime.now(timezone.utc) - datetime.fromisoformat(
                         last_success.replace('Z', '+00:00'))
-                    if age.total_seconds() > source['freshness_hours'] * 3600:
-                        collection_state = 'stale'
-                        state = {**state,
-                                 'reason':'The last successful collection is older than the source freshness target.'}
+                    freshness_state = ('stale'
+                                       if age.total_seconds() > source['freshness_hours'] * 3600
+                                       else 'current')
                 except (AttributeError, ValueError):
                     collection_state = 'failed'
+                    freshness_state = 'invalid'
                     state = {**state,
                              'reason':'The saved success timestamp is invalid.'}
             stored_observation_count = len(observations[source['id']])
@@ -1393,12 +1397,14 @@ def create_app(settings=None):
                               'adapter_state':adapter_state,
                               'configuration_state':configuration_state,
                               'collection_state':collection_state,
+                              'freshness_state':freshness_state,
                               'observation_state':observation_state,
                               'stored_observation_count':stored_observation_count,
                               'api_availability_state':api_availability_state,
                               'last_success':None, 'last_attempt':None, **public_state})
         connected = [source for source in presented
                      if source['collection_state'] == 'succeeded'
+                     and source['freshness_state'] == 'current'
                      and source['observation_state'] == 'stored_current'
                      and source['api_availability_state'] == 'available']
         return {'sources':presented, 'market':'NG',

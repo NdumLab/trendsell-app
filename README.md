@@ -68,7 +68,7 @@ Consequences that are enforced, not aspirational:
 | Decision Room | Editable unit economics, three scenarios, cost waterfall, sensitivity, saved assessments. A dated supplier quote can populate MOQ/cost and is snapshotted with explicit non-USD conversion. Coverage, confidence and compliance come from the server, not the browser |
 | Watchlist | Saved watches and materiality thresholds. Scheduled collection and delivery are **not** enabled, and the screen says so |
 | Suppliers | User-recorded quotes preserving original amount, currency, MOQ, terms, date, source and author; RFQ drafts are not sent on your behalf |
-| Data Health | Every required source, with typed adapter, configuration, collection, stored-observation and API-availability states. The API never claims browser display; browser tests and an authorised real-data check prove that separately |
+| Data Health | Every required source, with typed adapter, configuration, collection outcome, freshness, stored-observation and API-availability states. The API never claims browser display; browser tests and an authorised real-data check prove that separately |
 | Market Gaps | Corridor view that reports insufficient evidence rather than an untapped opportunity |
 
 Not enabled in the current production deployment, and not implied where unavailable: authorised

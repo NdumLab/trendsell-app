@@ -172,6 +172,7 @@ def test_an_authorised_commercial_response_resolves_identity_and_records_traceab
         assert catalog_health['adapter_state'] == 'implemented'
         assert catalog_health['configuration_state'] == 'configured'
         assert catalog_health['collection_state'] == 'succeeded'
+        assert catalog_health['freshness_state'] == 'current'
         assert catalog_health['observation_state'] == 'stored_current'
         assert catalog_health['stored_observation_count'] >= 1
         assert catalog_health['api_availability_state'] == 'available'
@@ -221,6 +222,7 @@ def test_a_source_failure_stays_unavailable_and_does_not_create_declining_demand
         catalog_health = next(source for source in health['sources'] if source['id'] == 'catalog')
         assert catalog_health['configuration_state'] == 'configured'
         assert catalog_health['collection_state'] == 'failed'
+        assert catalog_health['freshness_state'] == 'never_succeeded'
         assert catalog_health['last_success'] is None
         assert catalog_health['observation_state'] == 'none'
         assert catalog_health['api_availability_state'] == 'unavailable'
@@ -409,8 +411,8 @@ def test_disabling_configuration_does_not_erase_collection_history_from_typed_he
         with app.state.database.session() as db:
             db.add(Record(
                 workspace_id=owner['workspace_id'], kind='source_status', key='catalog',
-                payload={'status':'connected', 'last_attempt':'2026-09-18T00:00:00Z',
-                         'last_success':'2026-09-18T00:00:01Z',
+                payload={'status':'connected', 'last_attempt':'2000-01-01T00:00:00Z',
+                         'last_success':'2000-01-01T00:00:01Z',
                          'reason':'A prior collection succeeded.'}))
             db.commit()
 
@@ -418,6 +420,7 @@ def test_disabling_configuration_does_not_erase_collection_history_from_typed_he
                        if item['id'] == 'catalog')
         assert catalog['configuration_state'] == 'disabled'
         assert catalog['collection_state'] == 'succeeded'
-        assert catalog['last_success'] == '2026-09-18T00:00:01Z'
+        assert catalog['freshness_state'] == 'stale'
+        assert catalog['last_success'] == '2000-01-01T00:00:01Z'
         assert catalog['observation_state'] == 'none'
         assert catalog['api_availability_state'] == 'unavailable'

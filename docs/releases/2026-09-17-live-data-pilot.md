@@ -61,7 +61,7 @@ remain on the roadmap after the minimum DataForSEO + Bright Data pipeline proves
   are removed. Historical assessments retain their inputs/economics but provider values become
   explicit expiry tombstones. Restores apply the same purge before serving data.
 - Per-workspace Data Health uses explicit typed states for adapter implementation, configuration,
-  latest collection, current stored observations and authenticated API availability. It makes no
+  latest collection outcome, collection freshness, current stored observations and authenticated API availability. It makes no
   claim that API availability means a screen displayed the data; browser acceptance proves display.
 - Real search series is selected for the user chart; chart rows retain their real truth state and
   source instead of the prior hard-coded demo label.

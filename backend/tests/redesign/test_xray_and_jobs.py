@@ -112,6 +112,7 @@ def test_data_health_reports_explicit_configuration_collection_storage_and_api_s
         expected_configuration = 'disabled' if source['adapter_state'] == 'implemented' else 'not_applicable'
         assert source['configuration_state'] == expected_configuration
         assert source['collection_state'] == 'never_attempted'
+        assert source['freshness_state'] == 'never_succeeded'
         assert source['observation_state'] == 'none'
         assert source['stored_observation_count'] == 0
         assert source['api_availability_state'] == 'unavailable'
