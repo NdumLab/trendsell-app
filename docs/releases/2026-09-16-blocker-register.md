@@ -167,3 +167,16 @@ split is `E` 16 and `N` 6: the sixteen `E` gates are `R06`, `F01`, `S02`, `S03`,
 `I03`, `I07`, `D02`, `D04`, `D05`, `O04`, `O05`, `A04`, `T03` and `T06`, and the six `N` gates are
 `D06` and `C01`–`C05`. `H` was correct at 38 and the blocked total was correct at 60, so no gate
 changed state and no headline figure moves. One gate had been counted against the wrong class.
+
+### `F05` re-executed for `e954830` (20 September 2026 UTC)
+
+`F05` was re-executed against candidate `e954830` under a virtual environment built from the
+artifact's own `backend/requirements.lock`, and **passes for that candidate**. Evidence:
+[`2026-09-20-f05-closure.md`](2026-09-20-f05-closure.md) — 900 synthetic domain records across
+five workspaces, two two-worker starts both ready at `0006_workspace_invitations` with a no-op
+upgrade between them, backup and restore into a separate database, reconciliation keyed by
+workspace id, and 100 of 100 saved assessments replayed.
+
+`F06` remains blocked: it needs its own staged dependency-fault exercise, which was not performed.
+The confirmed PASS count for `e954830` is therefore **1 of 69**. The exercise was executed by the
+change author, so the `R04` and `O05` independence requirements are unaffected by it.
