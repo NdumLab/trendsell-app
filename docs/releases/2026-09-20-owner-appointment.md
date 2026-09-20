@@ -1,10 +1,12 @@
-# Accountable owner appointment — UNSIGNED DRAFT
+# Accountable owner appointment — PARTIALLY RECORDED
 
-Prepared 20 September 2026 UTC. **Nothing on this page is in force.** No name below has been
-supplied by the person named, no date has been recorded, and no gate changes state because this
-file exists. It is a form, prepared so that appointment costs one edit rather than an afternoon.
+Prepared 20 September 2026 UTC; first rows recorded the same day.
 
-Silence does not appoint anyone. An unsigned row is not an owner.
+**Only the rows marked Accepted are in force.** A row marked Proposed names a person who has not
+yet confirmed to this record that they accept the role. Henry Ndum proposing a colleague is Henry's
+decision to ask them; it is not their acceptance, and it does not satisfy any gate that requires a
+named accountable owner. Silence does not appoint anyone, and being named by someone else is
+silence.
 
 ## Why this page is the first thing
 
@@ -18,13 +20,26 @@ review.
 
 ## The rows
 
-| Role | Full name | Contact | Date accepted (UTC) |
-| --- | --- | --- | --- |
-| Product | | | |
-| Engineering / Platform | | | |
-| Security / Privacy | | | |
-| Operations / Support | | | |
-| Independent reviewer (not the change author) | | | |
+| Role | Full name | Contact | Status | Date (UTC) |
+| --- | --- | --- | --- | --- |
+| Product | Henry Ndum | admin@yerikasystems.com | **Accepted** | 2026-09-20 |
+| Engineering / Platform | Henry Ndum | admin@yerikasystems.com | **Accepted** | 2026-09-20 |
+| Security / Privacy | *withheld pending acceptance* | — | Proposed by Henry Ndum | 2026-09-20 |
+| Operations / Support | *withheld pending acceptance* | — | Proposed by Henry Ndum | 2026-09-20 |
+| Independent reviewer (not the change author) | — | — | **Not appointed** | — |
+
+Henry Ndum holds Product and Engineering / Platform by elimination: the two roles he did not
+assign to someone else. If he intended a different split, this table is wrong and should be
+corrected before any gate cites it.
+
+Two people have been proposed for Security / Privacy and Operations / Support. Their names are
+**deliberately not published here yet**, for two reasons: neither has confirmed acceptance to this
+record, and this repository is public, so recording a private individual's name and role is a
+publication that cannot be retracted later. Both names are held outside the repository and will be
+entered once they confirm they accept the role and are content to be named publicly.
+
+The independent reviewer is **unfilled and cannot be Henry Ndum**, who holds two approving roles
+above. `R04`, `R05`, `O05` and the exclusion verifications remain blocked on this row.
 
 ## What each role is accepting
 
@@ -65,13 +80,18 @@ excluded capabilities really are inaccessible and unpromised (`T01`, `T04`, `T07
 A qualified security reviewer for `S09` is a separate appointment and is expected to cost money;
 it is deliberately not bundled into this row.
 
-## Also unresolved: commit attribution
+## Commit attribution — resolved
 
-This repository has no configured git identity. Every recent commit is authored
-`root <root@srv1753392.hstgr.cloud>`, so no change in its history is attributable to a person.
-A register that requires a named human, a UTC date and an approval reference cannot rest on a
-history where authorship is a machine account. Setting `user.name` and `user.email` is part of
-appointment, not separate from it.
+The repository git identity is now `Henry Ndum <admin@yerikasystems.com>`. Commits from
+20 September 2026 onward are attributable to a person. Commits before that remain authored
+`root <root@srv1753392.hstgr.cloud>` and are not retrospectively attributable; history was not
+rewritten, because rewriting published history to manufacture attribution would be worse than
+recording the gap.
+
+A contact telephone number was supplied for Henry Ndum and is **deliberately not recorded here**.
+This repository is public, and a personal telephone number in published release documentation is
+not retractable. Operational contact details belong in the `/etc/trendsell` configuration or an
+access-controlled operations record, not in the tracked tree.
 
 ## How this becomes real
 
