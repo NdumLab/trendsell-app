@@ -26,20 +26,27 @@ review.
 | Engineering / Platform | Henry Ndum | admin@yerikasystems.com | **Accepted** | 2026-09-20 |
 | Security / Privacy | *withheld pending acceptance* | — | Proposed by Henry Ndum | 2026-09-20 |
 | Operations / Support | *withheld pending acceptance* | — | Proposed by Henry Ndum | 2026-09-20 |
-| Independent reviewer (not the change author) | — | — | **Not appointed** | — |
+| Independent reviewer (not the change author) | *withheld pending acceptance* | — | Proposed by Henry Ndum | 2026-09-20 |
 
 Henry Ndum holds Product and Engineering / Platform by elimination: the two roles he did not
 assign to someone else. If he intended a different split, this table is wrong and should be
 corrected before any gate cites it.
 
-Two people have been proposed for Security / Privacy and Operations / Support. Their names are
-**deliberately not published here yet**, for two reasons: neither has confirmed acceptance to this
-record, and this repository is public, so recording a private individual's name and role is a
-publication that cannot be retracted later. Both names are held outside the repository and will be
-entered once they confirm they accept the role and are content to be named publicly.
+Three people have been proposed: two for Security / Privacy and Operations / Support, and one for
+the independent reviewer. Their names are **deliberately not published here yet**, for two
+reasons: none has confirmed acceptance to this record, and this repository is public, so recording
+a private individual's name and role is a publication that cannot be retracted later. The names
+are held in `/etc/trendsell/owner-appointments.md`, outside the tracked tree, and will be entered
+here once each person confirms they accept the role and are content to be named publicly.
 
-The independent reviewer is **unfilled and cannot be Henry Ndum**, who holds two approving roles
-above. `R04`, `R05`, `O05` and the exclusion verifications remain blocked on this row.
+The independent reviewer row now has a proposed holder, named by Henry Ndum on 20 September 2026
+and recorded outside this repository. The row is **Proposed, not Accepted**, so `R04`, `R05`,
+`O05` and the exclusion verifications remain blocked exactly as before. Nothing about this
+appointment is in force until that person confirms acceptance to this record.
+
+The independence requirement is satisfiable by this candidate: the proposed reviewer is not
+Henry Ndum, and `git log` shows no commit in this repository authored by them, so they are not the
+author of the change under review. That is a fact about the candidate, not an acceptance.
 
 ## What each role is accepting
 
