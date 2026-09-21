@@ -1,0 +1,33 @@
+# systemd one-shot backup unit for TrendSell (action plan P06).
+# Install as /etc/systemd/system/trendsell-backup.service only after the backup location,
+# retention and access owner have been approved. The destination must already exist and
+# be writable only by the trendsell service account.
+
+[Unit]
+Description=Back up the TrendSell PostgreSQL database
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/trendsell/trendsell.env
+
+[Service]
+Type=oneshot
+User=trendsell
+Group=trendsell
+WorkingDirectory=/opt/trendsell/current
+Environment=TRENDSELL_BACKUP_DIR=/var/backups/trendsell
+Environment=TRENDSELL_BACKUP_KEEP=14
+EnvironmentFile=/etc/trendsell/trendsell.env
+# Keep storage credentials out of the web process. This root-readable file is loaded only
+# by the backup one-shot; the leading dash keeps local-only development installations valid.
+EnvironmentFile=-/etc/trendsell/backup-s3.env
+ExecStart=/opt/trendsell/current/scripts/backup_postgres.sh
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/trendsell /etc/trendsell
+ReadWritePaths=/var/backups/trendsell
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true

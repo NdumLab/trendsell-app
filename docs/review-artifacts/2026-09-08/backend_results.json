@@ -1,0 +1,105 @@
+{
+  "legacy_password_with_spaces": {
+    "hash_verifies_directly": true,
+    "login_status": 401
+  },
+  "expired_source_approval": {
+    "status": "approved",
+    "hs_code": "",
+    "requirements": [],
+    "gate_resolved": true
+  },
+  "rejected_import_assessment": {
+    "decision": "WATCH",
+    "compliance": {
+      "resolved": false,
+      "status": "rejected",
+      "review_id": "593420f2-2f6f-4280-83b4-a05ca397c954",
+      "reason": "A reviewer rejected this product for import. Do not proceed."
+    },
+    "confidence": 60
+  },
+  "export": {
+    "keys": [
+      "counts",
+      "decisions",
+      "demo",
+      "exported_at",
+      "exported_by",
+      "products",
+      "quotes",
+      "research_jobs",
+      "schema",
+      "watches",
+      "workspace",
+      "workspace_id"
+    ],
+    "exported_counts": {
+      "products": 1,
+      "research_jobs": 1,
+      "decisions": 2,
+      "quotes": 0,
+      "watches": 0
+    }
+  },
+  "restore_verification": {
+    "records_by_kind": {
+      "compliance_review": 2,
+      "decision": 2,
+      "evidence": 4,
+      "job": 1,
+      "product": 1
+    },
+    "assessment_replay_failures": [
+      {
+        "id": "66dfe013-b3ba-4774-baf1-3ff93a6b1990",
+        "fields": [
+          "decision",
+          "blockers",
+          "confidence"
+        ],
+        "formula_version": "unit-economics/1.1.0"
+      },
+      {
+        "id": "b2d966de-e651-43a9-9b65-9d52cc83f36a",
+        "fields": [
+          "decision",
+          "blockers",
+          "confidence"
+        ],
+        "formula_version": "unit-economics/1.1.0"
+      }
+    ]
+  },
+  "cross_workspace_metrics": {
+    "status": 200,
+    "foreign_marker_visible": true
+  },
+  "unmatched_route_labels": {
+    "new_labels_from_20_unknown_paths": 20
+  },
+  "readiness_missing_audit_table": {
+    "status": 200,
+    "body": {
+      "status": "ready",
+      "database": "ok",
+      "schema_revision": "0003_audit_detail",
+      "expected_revision": "0003_audit_detail"
+    }
+  },
+  "documented_legacy_migration": {
+    "before_stamp_matches_models": false,
+    "before_stamp_missing_columns": {
+      "audit_events": [
+        "detail",
+        "request_id"
+      ],
+      "rate_buckets": [
+        "expires_at"
+      ]
+    },
+    "after_stamp_up_to_date": false,
+    "after_stamp_revision": "0001_pilot_baseline",
+    "head_revision": "0003_audit_detail"
+  }
+}

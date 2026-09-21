@@ -1,0 +1,37 @@
+{
+  "reviewed_commit": "71cd584",
+  "date": "2026-09-09",
+  "backend_sqlite": {
+    "passed": 458,
+    "skipped": 14
+  },
+  "backend_postgresql": {
+    "passed": 472,
+    "skipped": 0
+  },
+  "frontend_unit": {
+    "passed": 141
+  },
+  "typecheck_including_e2e": "passed",
+  "production_build": "passed; main JavaScript bundle 765.75 kB (232.73 kB gzip)",
+  "existing_browser_suite": {
+    "passed": 35
+  },
+  "independent_browser_specimen": {
+    "failed": 1,
+    "trigger": "The product detail request returns HTTP 503; other requests succeed.",
+    "draft": {
+      "confidence": 0,
+      "decision": "INSUFFICIENT EVIDENCE",
+      "evidence_records": 0
+    },
+    "saved": {
+      "confidence": 60,
+      "decision": "WATCH",
+      "evidence_records": 4
+    }
+  },
+  "dependency_scans": "Not rerun; all dependency locks unchanged since previous review.",
+  "production_deployed_or_inspected": false,
+  "remote_ci_verified": false
+}

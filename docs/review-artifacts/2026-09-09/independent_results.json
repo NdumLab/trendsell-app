@@ -1,0 +1,47 @@
+{
+  "reset_token_after_password_change": {
+    "reset_status": 200,
+    "expected_status": 400,
+    "changed_password_login": 401,
+    "reset_password_login": 200
+  },
+  "punctuation_only_classification": {
+    "approval_status": 200,
+    "expected_status": 422,
+    "gate": {
+      "resolved": true,
+      "status": "approved",
+      "reason": "Approved by a reviewer on 2026-09-09, valid to 2027-03-08.",
+      "review_id": "34f551b9-d114-441b-99e9-f457af6aaaef",
+      "expires_at": "2027-03-08T01:41:39.163109+00:00",
+      "hs_code": ".",
+      "requirements": []
+    }
+  },
+  "legacy_incomplete_approval": {
+    "gate": {
+      "resolved": true,
+      "status": "approved",
+      "reason": "Approved by a reviewer on 2026-09-09, valid to 2027-03-08.",
+      "review_id": "34f551b9-d114-441b-99e9-f457af6aaaef",
+      "expires_at": "2027-03-08T01:41:39.163109+00:00",
+      "hs_code": "",
+      "requirements": []
+    },
+    "expected_resolved": false
+  },
+  "pre_router_metrics_paths": {
+    "new_labels": 20,
+    "expected_at_most": 1,
+    "raw_marker_retained": true,
+    "owner_metrics_status": 403
+  },
+  "concurrent_reset_single_use": {
+    "statuses": [
+      200,
+      200
+    ],
+    "expected_successes": 1,
+    "actual_successes": 2
+  }
+}

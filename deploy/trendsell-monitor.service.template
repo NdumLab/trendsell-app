@@ -1,0 +1,35 @@
+[Unit]
+Description=Collect TrendSell health signals and deliver state-change alerts
+After=network-online.target trendsell.service
+Wants=network-online.target
+ConditionPathExists=/etc/trendsell/monitor.env
+
+[Service]
+Type=oneshot
+User=trendsell-monitor
+Group=trendsell-monitor
+SupplementaryGroups=systemd-journal
+WorkingDirectory=/opt/trendsell/current
+EnvironmentFile=/etc/trendsell/monitor.env
+# Optional, separately permissioned read-only recovery credentials and locations. Never
+# put the runtime or migration database URL in this file.
+EnvironmentFile=-/etc/trendsell/recovery-monitor.env
+ExecStart=/opt/trendsell/venv/bin/python /opt/trendsell/current/scripts/monitor_trendsell.py
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+ReadOnlyPaths=/opt/trendsell /etc/trendsell /var/backups/trendsell
+ReadWritePaths=/var/lib/trendsell-monitor

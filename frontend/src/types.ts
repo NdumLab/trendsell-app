@@ -1,193 +1,146 @@
-export interface SalesDriver {
-  name: string;
-  type: string;
-  description: string;
-  impact_score: number;
+export type Truth = 'Observed' | 'Calculated' | 'Estimated' | 'User input' | 'Unavailable' | 'Demo';
+export type Decision = 'GO' | 'WATCH' | 'NO-GO' | 'INSUFFICIENT EVIDENCE';
+export interface PublicConfig {
+  allow_registration: boolean;
+  release_tier: 'development' | 'controlled_pilot';
+  invitation_only: boolean;
+  billing_enabled: boolean;
+  destination: string;
+  demo: boolean;
+  research_daily_limit: number;
+  mail_delivery_configured: boolean;
+  account_recovery: 'email' | 'operator_required';
+  audit_retention_days: number;
+  features: {
+    billing: boolean; public_registration: boolean; recurring_monitoring: boolean;
+    alert_delivery: boolean; import_review: boolean; attachments: boolean;
+    additional_markets: boolean;
+  };
 }
-
-export interface Supplier {
-  name: string;
-  platform: string;
-  moq: number;
-  unit_price: string;
-  lead_time_days: number;
-  rating: number;
-  url: string;
+/** One dated record about a product. Manual records are 'User input'; records from a
+ *  connected, authorised collector are 'Observed' (E06). */
+export interface Observation {
+  id: string; metric: string; value: number | null; unit: string; source?: string; source_url: string | null;
+  source_name?: string; method?: string; notes?: string; input_author?: string; recorded_at?: string;
+  market: string; observed_at: string; fetched_at?: string; truth_state: Truth; confidence?: number;
+  snapshot_id?: string; collector_version?: string; parser_version?: string; usage_rights?: string;
+  source_id?: string; expires_at?: string;
+  retention_state?: 'expired';
+  series?: { date: string; value: number | null }[];
 }
-
-export interface AggregatedSupplier extends Supplier {
-  products: string[];
-  categories: string[];
-  product_count: number;
+/** The versioned evidence-quality reading. A coverage score, not a probability (E07). */
+export interface EvidenceQuality {
+  confidence: number; coverage: boolean; compliance_resolved: boolean; overall: number | null;
+  observation_ids: string[]; method_version: string; score_meaning: string;
+  components: { name: string; detail: string; points: number; max: number }[];
+  raw_points: number; capped_at: number | null; records_in_window: number; records_total: number;
+  limitations: string[];
 }
-
-export interface Competitor {
-  name: string;
-  platform: string;
-  monthly_revenue: string;
-  strength: number;
+export interface ComplianceGate {
+  resolved: boolean; status: 'none'|'requested'|'approved'|'rejected'|'expired'|'support_expired'|'review_incomplete'|'superseded'|'more_information';
+  re_review_pending?: boolean;
+  reason: string; review_id?: string; expires_at?: string; hs_code?: string; requirements?: string[];
 }
-
-export interface ChannelRecommendation {
-  platform: string;
-  score: number;
-  reason: string;
-  est_margin_pct: number;
+export interface ComplianceReview {
+  id: string; product_id: string; product_name?: string; status: string; specifications: string;
+  intended_use: string; question: string; hs_code_candidate?: string; hs_code?: string;
+  rationale?: string; requirements?: string[]; reviewer_id?: string; requested_by?: string;
+  requested_at?: string; decided_at?: string; expires_at?: string | null;
+  superseded_by?: string | null; created_at: string;
+  sources?: { title: string; url: string; publisher: string; effective_from: string; effective_to?: string | null }[];
 }
-
-export interface AdSpendEstimate {
-  platform: string;
-  monthly_budget: string;
-  expected_roas: string;
-  difficulty: string;
+/** A product's evidence status and the user's latest saved assessment are different facts
+ *  and are stored, returned and displayed separately (action plan T07). */
+export interface LatestAssessment {
+  id: string; decision: Decision; saved_at: string; compliance: Inputs['compliance'];
+  channel: string; shipping: Inputs['shipping']; truth_state: Truth;
+  formula_version: string; threshold_version?: string | null;
+  economics: { base_margin_pct: number; downside_margin_pct: number; contribution: number; break_even_units: number | null; viable: boolean; failures: string[]; threshold_version: string };
 }
-
-export interface BundleSuggestion {
-  items: string[];
-  bundle_price: string;
-  margin_uplift_pct: number;
-  reason: string;
+export interface Product {
+  id: string; name: string; category: string; asin: string; source_url: string; market: string;
+  confirmed: boolean; truth_state: Truth; decision: Decision; confidence: number; stage: string;
+  blocker: string; observations: Observation[]; created_at: string; latest_assessment?: LatestAssessment | null;
+  evidence_quality?: EvidenceQuality; compliance?: ComplianceGate;
+  identity_source?: string; identity_source_id?: string; identity_observed_at?: string;
+  identity_collected_at?: string; identity_snapshot_id?: string;
+  discovery_context?: { discovery_id: string; snapshot_id?: string; query?: string;
+    selected_asin: string; selected_title?: string; selected_position?: number;
+    selected_at: string; match_state: 'candidate_selected'; limitations: string };
+  catalog?: Record<string, unknown>;
+  local_candidates?: LocalCandidate[]; local_candidates_observed_at?: string;
+  fx_reference?: { usd_ngn: number; usd_cny: number; cny_ngn_calculated: number;
+    observed_at: string; snapshot_id: string; truth_state: Truth; calculation: string };
+  illustration?: 'steamer' | 'lamp' | 'blender'; signals?: string[];
 }
-
-export interface Region {
-  code: string;
-  flag: string;
-  name: string;
-  intensity: number;
+export interface LocalCandidate {
+  title: string; url: string; brand?: string; price?: number; currency?: string;
+  rating?: number; rating_count?: number; availability?: string | boolean; seller?: string;
+  sku?: string; match_score: number; match_status: 'candidate'; match_method: string;
 }
-
-export interface Niche {
-  name: string;
-  competition: string;
+export interface DiscoveryCandidate {
+  asin: string; title: string; url: string; position?: number; absolute_position?: number;
+  price_from?: number; price_to?: number; currency?: string; rating?: number;
+  rating_votes?: number; bought_past_month_indicator?: number;
+  is_amazon_choice?: boolean; is_best_seller?: boolean; result_type: 'organic';
 }
-
-export interface MarketBrief {
-  executive_summary: string;
-  market_opportunity: string;
-  competition_level: string;
-  recommended_platforms: string[];
-  estimated_roi: string;
-  key_risks: string[];
-  action_items: string[];
-  generated_at: string;
-  model: string;
+export interface DiscoveryRun {
+  id: string; status: 'queued'|'running'|'succeeded'|'unavailable'; query: string;
+  limit: number; source_id: string; source_name?: string; truth_state: Truth;
+  candidates: DiscoveryCandidate[]; detail: string; error_code?: string;
+  observed_at?: string; collected_at?: string; expires_at?: string;
+  source_url?: string; provider_request_id?: string; snapshot_id?: string;
 }
-
-export interface OpportunityBreakdown {
-  trend: number;
-  velocity: number;
-  saturation_inverse: number;
-  margin_potential: number;
-  first_mover: number;
+export interface User { id: string; name: string; email: string; workspace_id: string;
+  role: 'owner' | 'analyst' | 'reviewer' | 'viewer';
+  /** Null until this installation has proved control of the address. */
+  email_verified?: boolean; email_verified_at?: string | null }
+export interface WorkspaceInvitation {
+  id: string; email: string; role: 'analyst' | 'reviewer' | 'viewer'; created_at: string;
+  expires_at: string; sent_at: string | null; accepted_at: string | null; revoked_at: string | null;
 }
-
-export interface Product extends Partial<ProductLocaleFields> {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  trend_score: number;
-  demand_level: string;
-  image_url: string;
-  trending_platforms: string[];
-  price_range: string;
-  estimated_monthly_revenue: string;
-  growth_rate: number;
-  sales_drivers: SalesDriver[];
-  market_opportunity_score: number;
-  why_trending: string;
-  date_added: string;
-  trend_history: number[];
-  suppliers: Supplier[];
-  saturation_score: number;
-  saturation_label: string;
-  is_early_opportunity: boolean;
-  velocity_pct: number;
-  velocity_label: string;
-  opportunity_score: number;
-  opportunity_breakdown: OpportunityBreakdown;
-  seasonal_demand: number[];
-  competitors: Competitor[];
-  channel_recommendations: ChannelRecommendation[];
-  ad_spend_estimates: AdSpendEstimate[];
-  bundle_suggestions: BundleSuggestion[];
-  regions: Region[];
-  niches: Niche[];
-  market_brief: MarketBrief | null;
+export interface JobEvent { id: number; step: string; status: string; detail: string; at: string }
+export interface Job { id: string; product_id: string; status: string; events: JobEvent[] }
+export interface Source { id: string; name: string; category: string; markets: string[]; reason: string; rights: string;
+  last_success: string | null; last_attempt: string | null; next_retry: string; freshness_hours: number;
+  adapter_state: 'implemented'|'not_implemented';
+  configuration_state: 'disabled'|'missing_requirements'|'configured'|'not_applicable';
+  collection_state: 'never_attempted'|'in_progress'|'succeeded'|'failed';
+  freshness_state: 'never_succeeded'|'current'|'stale'|'invalid';
+  observation_state: 'none'|'stored_current'; stored_observation_count: number;
+  api_availability_state: 'unavailable'|'available';
+  retention_days: number | null }
+export interface Inputs {
+  quantity: number; unit_cost_usd: number; fx_ngn: number; freight_ngn: number; duty_pct: number;
+  import_tax_pct: number; selling_price_ngn: number; channel_fee_pct: number; returns_pct: number;
+  marketing_ngn: number; fixed_cost_ngn: number; stress_pct: number;
+  compliance: 'unresolved' | 'prohibited'; channel: string; shipping: 'Air' | 'Sea';
 }
-
-export interface TrendsResponse {
-  total_products: number;
-  avg_opportunity: number;
-  top_velocity_platform: string;
-  active_drivers: number;
-  early_opportunities: number;
-  categories: { category: string; count: number; avg_score: number }[];
-  platforms: { platform: string; count: number }[];
-  trend_series: Record<string, number | string>[];
-  top_products: { name: string; trend_score: number; growth_rate: number }[];
+export interface Scenario {
+  name: string; supplier: number; freight: number; duty: number; import_tax: number; landed_cost: number;
+  price: number; fees: number; returns: number; marketing: number; overhead: number;
+  contribution: number; margin_pct: number; cash_required: number; break_even_cac: number; break_even_units: number | null;
 }
-
-export interface PlatformFee {
-  platform: string;
-  referral_fee_pct: number;
-  fulfillment_fee: string;
-  monthly_subscription: string;
-  payment_processing_pct: number;
-  notes: string;
+/** Saved economics inputs/calculations are immutable and self-contained. Provider evidence
+ * copies may later become explicit retention tombstones, so expired data cannot remain usable. */
+export interface Assessment {
+  id?: string; created_at?: string; product_id?: string; product_name?: string; product_asin?: string;
+  formula_version: string; threshold_version?: string; evidence_version?: string; input_author?: string;
+  truth_state: Truth; currency: string; market: string; decision: Decision; confidence: number;
+  observation_ids: string[]; evidence?: Observation[]; blockers: string[]; scenarios: Scenario[];
+  inputs: Inputs; input_truth_state: Truth;
+  evidence_quality?: EvidenceQuality; compliance?: ComplianceGate; compliance_review_id?: string | null;
+  quote_id?: string | null; supplier_quote?: Quote | null;
+  quote_conversion?: { source_currency: string; rate_to_usd: number; effective_unit_cost_usd: number; truth_state: Truth } | null;
+  economics?: { base_margin_pct: number; downside_margin_pct: number; contribution: number; break_even_units: number | null; viable: boolean; failures: string[]; threshold_version: string };
+  evidence_retention_applied_at?: string; expired_evidence_count?: number;
 }
+export interface Watch { id: string; product_id: string; product_name?: string | null; product_decision?: Decision; latest_assessment?: LatestAssessment | null; threshold_pct: number; status: string; scheduled: boolean; created_at: string }
+export interface Quote { id: string; product_id: string; product_name?: string | null; supplier: string; source_url: string;
+  unit_price?: number; unit_price_usd?: number; currency: string; moq: number; lead_days: number; quote_date: string; incoterm: string;
+  notes: string; truth_state: Truth; verification: string; input_author?: string; recorded_at?: string }
 
-export interface Country {
-  code: string;
-  flag: string;
-  name: string;
-  region: string;
-  currency: string;
-  symbol: string;
-  ppp: number;
-  fx: number;
-  platforms: string[];
-  tariff_pct: number;
-  shipping_air: number;
-  shipping_sea: number;
-  lead_air: number;
-  lead_sea: number;
-}
-
-export interface LandedCost {
-  mode: string;
-  unit_cost_usd: number;
-  unit_cost_local: string;
-  shipping_usd: number;
-  shipping_local: string;
-  tariff_pct: number;
-  tariff_usd: number;
-  tariff_local: string;
-  customs_fee_usd: number;
-  customs_fee_local: string;
-  total_usd: number;
-  total_local: string;
-  lead_time_days: number;
-}
-
-// Location-aware fields added to Product responses server-side
-export interface ProductLocaleFields {
-  country_code: string;
-  country_name: string;
-  country_flag: string;
-  local_currency: string;
-  local_symbol: string;
-  global_score: number;
-  local_score: number;
-  is_local_hidden_gem: boolean;
-  is_untapped_local: boolean;
-  local_platforms: string[];
-  local_price_range: string;
-  local_estimated_monthly_revenue: string;
-  usd_price_range: string;
-  local_competitors: Competitor[];
-  regulation_flag: "clear" | "certification" | "restricted";
-  regulation_note: string;
-  landed_cost_air: LandedCost;
-  landed_cost_sea: LandedCost;
+/** One sign-in session on this account. `id` is a one-way handle, never a token. */
+export interface AccountSession {
+  id: string; started_at: string; expires_at: string; client: string | null; current: boolean;
 }
