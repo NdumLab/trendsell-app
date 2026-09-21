@@ -179,3 +179,27 @@ Locally the suite reports 612 passed with no skips, against CI's 595 passed and 
 creates and drops its own schema inside it. The local run is therefore PostgreSQL-backed and
 equivalent to the CI PostgreSQL job, and no local test run has ever touched the production database.
 Anyone re-running this should confirm that port before trusting the count.
+
+## Branch head after this record
+
+Committing this record moves the branch head past `3478c98`, which is the same condition that left
+the candidate unevidenced in the first place. It does not create a new code candidate, and the rule
+that decides this is the one applied to `F05` above.
+
+**The code candidate is the most recent commit whose code tree objects differ.** A documentation
+commit leaves `backend`, `frontend`, `contracts`, `scripts` and `deploy` pointing at the same git
+tree objects, so it does not produce a new artifact and does not invalidate evidence attached to the
+commit before it. Verify rather than assume, for any later head:
+
+```bash
+for p in backend frontend contracts scripts deploy; do
+  [ "$(git rev-parse 3478c98:$p)" = "$(git rev-parse HEAD:$p)" ] \
+    && echo "$p identical" || echo "$p CHANGED — new candidate required"
+done
+```
+
+Read `R01`'s "head of pull request #1" accordingly: it was literally true when this record was
+written, and remains true of the code under review while every path above reports identical. As soon
+as one reports `CHANGED`, the nine confirmations stop applying and must be re-earned against the new
+SHA, exactly as this pass re-earned them. The one gate that then needs real re-execution rather than
+a re-run of the suites is `F06`, because it is a runtime exercise against the built artifact.
