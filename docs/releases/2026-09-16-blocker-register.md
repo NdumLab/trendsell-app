@@ -180,3 +180,34 @@ workspace id, and 100 of 100 saved assessments replayed.
 `F06` remains blocked: it needs its own staged dependency-fault exercise, which was not performed.
 The confirmed PASS count for `e954830` is therefore **1 of 69**. The exercise was executed by the
 change author, so the `R04` and `O05` independence requirements are unaffected by it.
+
+### Re-earned confirmations for candidate `3478c98` (21 September 2026 UTC)
+
+The nine gates this register withdrew on 19 September have been re-executed against the current
+candidate `3478c9891c79d01ef3d08535d810aa92830f5ebd`, the head of pull request #1. Evidence:
+[`2026-09-21-candidate-3478c98-confirmations.md`](2026-09-21-candidate-3478c98-confirmations.md).
+
+| Item | Value |
+| --- | --- |
+| Candidate | `3478c9891c79d01ef3d08535d810aa92830f5ebd` |
+| Remote CI | run `35554333213`, all seven jobs success, 2026-09-21T02:29Z |
+| Artifact | `trendsell-3478c9891c79.tar.gz`, SHA-256 `d2117dd6c78c5ce99d4e968d63f6594c5f25e69b7f9b3c0344afdabbe2d7ea1d` |
+| Confirmed PASS | **9 of 69** — `R01`, `R02`, `R03`, `F02`, `F03`, `F04`, `F05`, `F06`, `S08` |
+
+`3478c98` was the head of this branch but had never been pushed, so no CI had ever run against the
+exact candidate. It is now pushed and green.
+
+`F05` carries from the `e954830` exercise rather than being re-run: everything between the two
+commits is documentation, and the `backend`, `frontend`, `contracts`, `scripts` and `deploy` git
+tree objects are identical, so the register's "changed code or environment" condition does not
+apply. `F06` was re-run in full, because it is a runtime exercise rather than a test selection.
+
+**The blocked total does not change.** It remains 60, split `E` 16, `H` 38, `N` 6. The nine
+re-earned gates were never part of the 60; they were the previously passing set being carried as
+unverified. No blocked gate moved, and none could have been moved by this work: each of the 60
+requires a named accountable owner, a provider account or credential, an approved environment, or
+an exercise run by someone other than the change author.
+
+What this does establish is that the engineering-side verification queue for this candidate is
+empty. Every remaining blocker is a decision to obtain or an access to arrange, not a command to
+run.
