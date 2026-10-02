@@ -1,5 +1,10 @@
 # Handoff — corrections to the 8 September independent review
 
+> **Current continuation:** for the live-research readiness work handed off on
+> 30 September and completed locally on 2 October 2026, start with
+> [`releases/2026-09-30-claude-handoff.md`](releases/2026-09-30-claude-handoff.md).
+> The remainder of this file is the historical 8–10 September handoff.
+
 Branch: `impl/evidence-platform-phase0`. Original handoff head: `f81c424`.
 Production-readiness baseline before the 10 September follow-up: `ec93a25`.
 Reviewed commit: `83a4a0d`. Review: [CLAUDE_IMPLEMENTATION_REVIEW_2026-09-08.md](CLAUDE_IMPLEMENTATION_REVIEW_2026-09-08.md).

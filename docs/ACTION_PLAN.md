@@ -80,7 +80,8 @@ independently reviewed, and it does not mean deployed.
 | D03 gates from real records | Done | The decision endpoint computes coverage, confidence and compliance from stored records; the client cannot set them |
 | U02 coherent demo | Done (synthetic only) | The demo GO passes the production method and gates on labelled synthetic evidence and a synthetic reviewer approval; distinct per-product trajectories. **No real product has reached GO**, and none can until a collector supplies evidence above the 60-point self-reported cap |
 | C03 team-access portion | Partial | Owner-managed invitations and analyst/reviewer/viewer enforcement ship; billing, entitlements, cancellation/refunds and credit behavior remain planned with the rest of C03 |
-| N01, D01, D02, D04, U01, U03–U05, M01–M06, C01, C02, C04 | Planned | Not started in this pass |
+| D01 actionable quotes | Done (local verification; independent review pending) | Immutable quote revisions preserve supplier identity and exact decision provenance; validity, specifications, MOQ, Incoterm, delivery scope and payment terms are visible, with expiry/MOQ checks snapshotted into assessments. Full backend, frontend and browser suites passed on 2 October 2026. This is a new release candidate and has not been deployed or independently approved. |
+| N01, D02, D04, U01, U03–U05, M01–M06, C01, C02, C04 | Planned | Not started in this pass |
 
 **Operating rules that every phase must preserve**
 
