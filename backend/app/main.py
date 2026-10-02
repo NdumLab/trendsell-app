@@ -192,7 +192,15 @@ class QuoteRequest(StrictModel):
     moq: int = Field(ge=1, le=1000000)
     lead_days: int = Field(ge=1, le=1000)
     quote_date: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    valid_until: str | None = Field(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$')
     incoterm: Literal['EXW','FOB','CIF','DDP'] = 'FOB'
+    product_specifications: str = Field(default='', max_length=2000)
+    payment_terms: str = Field(default='', max_length=1000)
+    delivery_scope: Literal[
+        'unspecified', 'factory_only', 'international_freight',
+        'international_and_local_delivery'
+    ] = 'unspecified'
+    supersedes_quote_id: str | None = Field(default=None, max_length=64)
     notes: str = Field(default='', max_length=2000)
 
     @model_validator(mode='after')
@@ -2198,6 +2206,7 @@ def create_app(settings=None):
         snapshot = evidence_records(db,user,payload.product_id)
         quote_snapshot = None
         quote_conversion = None
+        quote_checks = None
         if payload.quote_id:
             quote_row = owned(db,user,'quote',payload.quote_id)
             if quote_row.payload.get('product_id') != payload.product_id:
@@ -2216,6 +2225,26 @@ def create_app(settings=None):
             quote_conversion = {'source_currency': currency, 'rate_to_usd': rate,
                                 'effective_unit_cost_usd': float(expected_usd),
                                 'truth_state': 'User input'}
+            valid_until = quote_snapshot.get('valid_until')
+            validity_state = ('not_recorded' if not valid_until else
+                              'expired' if valid_until < now()[:10] else 'current')
+            minimum = int(quote_snapshot['moq'])
+            quantity_state = ('meets_moq' if payload.inputs.quantity >= minimum
+                              else 'below_moq')
+            warnings = []
+            if validity_state == 'not_recorded':
+                warnings.append('The selected legacy quote has no explicit validity date.')
+            elif validity_state == 'expired':
+                warnings.append(f'The selected quote expired on {valid_until}.')
+            if quantity_state == 'below_moq':
+                warnings.append(
+                    f'The scenario quantity {payload.inputs.quantity} is below the quote MOQ {minimum}.')
+            quote_checks = {
+                'evaluated_at': now(), 'valid_until': valid_until,
+                'validity_state': validity_state, 'required_moq': minimum,
+                'scenario_quantity': payload.inputs.quantity,
+                'quantity_state': quantity_state, 'warnings': warnings,
+            }
         elif payload.quote_fx_to_usd is not None:
             raise HTTPException(422, 'A quote currency conversion requires a selected supplier quote.')
         result=calculate(payload.inputs, reading)
@@ -2226,6 +2255,7 @@ def create_app(settings=None):
                       evidence_quality=reading,compliance=gate,
                       quote_id=payload.quote_id,supplier_quote=quote_snapshot,
                       quote_conversion=quote_conversion,
+                      quote_checks=quote_checks,
                       compliance_review_id=review['id'] if review else None,
                       threshold_version=THRESHOLD_VERSION,formula_version=FORMULA_VERSION,
                       economics=economics_summary(result['scenarios']))
@@ -2348,13 +2378,48 @@ def create_app(settings=None):
         except ValueError: raise HTTPException(422,'Quote date is invalid.')
         if quoted > datetime.now(timezone.utc) + timedelta(days=1):
             raise HTTPException(422, 'A supplier quote cannot be dated in the future.')
+        if payload.valid_until:
+            try: valid_until = datetime.strptime(payload.valid_until,'%Y-%m-%d').replace(tzinfo=timezone.utc)
+            except ValueError: raise HTTPException(422,'Quote validity date is invalid.')
+            if valid_until < quoted:
+                raise HTTPException(422, 'Quote validity cannot end before the quote date.')
+        superseded = None
+        revision = 1
+        root_quote_id = None
+        if payload.supersedes_quote_id:
+            superseded = owned(db,user,'quote',payload.supersedes_quote_id)
+            if superseded.payload.get('product_id') != payload.product_id:
+                raise HTTPException(422, 'A quote revision must belong to the same product.')
+            if superseded.payload.get('supplier') != payload.supplier:
+                raise HTTPException(
+                    422, 'A quote revision must keep the same supplier identity. '
+                         'Record a different supplier as a new quote.')
+            newer = records(db,user,'quote').filter(
+                Record.payload['supersedes_quote_id'].as_string() == superseded.id).first()
+            if newer:
+                raise HTTPException(409, 'This quote already has a newer revision.')
+            revision = int(superseded.payload.get('revision', 1)) + 1
+            root_quote_id = superseded.payload.get('root_quote_id') or superseded.id
         body = payload.model_dump(exclude_none=True)
         amount = body.pop('unit_price_usd', None)
         if body.get('unit_price') is None:
             body['unit_price'] = amount
-        row=insert(db,user,'quote',{**body,'truth_state':'User input','verification':'Unverified',
-                                   'input_author':user.id,'recorded_at':now(),'market':'NG'})
-        audit(db,user,'quote.recorded',row.id,product_id=payload.product_id,incoterm=payload.incoterm,quote_date=payload.quote_date)
+        quote_payload = {**body,'truth_state':'User input','verification':'Unverified',
+                         'input_author':user.id,'recorded_at':now(),'market':'NG',
+                         'revision':revision,'root_quote_id':root_quote_id}
+        if superseded:
+            # The record key makes "one child per immutable version" a database
+            # invariant, not a check-then-insert race. A concurrent loser receives a
+            # truthful conflict and cannot silently fork the revision chain.
+            row, created = insert_unique(
+                db, user, 'quote', f'revision-of:{superseded.id}', quote_payload)
+            if not created:
+                raise HTTPException(409, 'This quote already has a newer revision.')
+        else:
+            row=insert(db,user,'quote',quote_payload)
+        audit(db,user,'quote.recorded',row.id,product_id=payload.product_id,
+              incoterm=payload.incoterm,quote_date=payload.quote_date,
+              revision=revision,supersedes_quote_id=payload.supersedes_quote_id)
         db.commit()
         return serialize(row)
 

@@ -102,6 +102,9 @@ test('the oldest product is quotable even though it is not on the loaded page', 
   await page.getByLabel('Minimum order (units)').fill('100');
   await page.getByLabel('Lead time (days)').fill('30');
   await page.getByLabel('Quote date').fill('2026-09-01');
+  await page.getByLabel('Valid until').fill('2026-12-01');
+  await page.getByLabel('Quoted product specifications').fill('Disposable test specification');
+  await page.getByLabel('Payment terms').fill('Payment before shipment');
   await page.getByRole('button', { name: /Save quote/ }).click();
 
   // The quote really was recorded against the product that was not on the loaded page.

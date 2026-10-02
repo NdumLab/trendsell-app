@@ -132,12 +132,18 @@ export interface Assessment {
   evidence_quality?: EvidenceQuality; compliance?: ComplianceGate; compliance_review_id?: string | null;
   quote_id?: string | null; supplier_quote?: Quote | null;
   quote_conversion?: { source_currency: string; rate_to_usd: number; effective_unit_cost_usd: number; truth_state: Truth } | null;
+  quote_checks?: { evaluated_at: string; valid_until: string | null;
+    validity_state: 'current'|'expired'|'not_recorded'; required_moq: number;
+    scenario_quantity: number; quantity_state: 'meets_moq'|'below_moq'; warnings: string[] } | null;
   economics?: { base_margin_pct: number; downside_margin_pct: number; contribution: number; break_even_units: number | null; viable: boolean; failures: string[]; threshold_version: string };
   evidence_retention_applied_at?: string; expired_evidence_count?: number;
 }
 export interface Watch { id: string; product_id: string; product_name?: string | null; product_decision?: Decision; latest_assessment?: LatestAssessment | null; threshold_pct: number; status: string; scheduled: boolean; created_at: string }
 export interface Quote { id: string; product_id: string; product_name?: string | null; supplier: string; source_url: string;
   unit_price?: number; unit_price_usd?: number; currency: string; moq: number; lead_days: number; quote_date: string; incoterm: string;
+  valid_until?: string | null; product_specifications?: string; payment_terms?: string;
+  delivery_scope?: 'unspecified'|'factory_only'|'international_freight'|'international_and_local_delivery';
+  supersedes_quote_id?: string | null; root_quote_id?: string | null; revision?: number;
   notes: string; truth_state: Truth; verification: string; input_author?: string; recorded_at?: string }
 
 /** One sign-in session on this account. `id` is a one-way handle, never a token. */

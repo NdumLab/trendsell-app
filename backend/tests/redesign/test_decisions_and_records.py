@@ -120,6 +120,64 @@ def test_a_quote_is_stored_as_unverified_user_input(client, confirmed):
     assert quote['recorded_at']
 
 
+def test_a_quote_records_explicit_commercial_scope_and_immutable_revisions(client, confirmed):
+    first = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Example Manufacturing Ltd',
+        'source_url': 'https://example.com/supplier/v1', 'unit_price': 8.4,
+        'currency': 'USD', 'moq': 300, 'lead_days': 25,
+        'quote_date': '2026-09-01', 'valid_until': '2026-10-01',
+        'incoterm': 'FOB', 'product_specifications': '1500 W, 220 V, 260 ml tank',
+        'payment_terms': '30% deposit; 70% before shipment',
+        'delivery_scope': 'factory_only'}).json()
+    assert first['revision'] == 1
+    assert first['valid_until'] == '2026-10-01'
+    assert first['product_specifications'] == '1500 W, 220 V, 260 ml tank'
+    assert first['payment_terms'] == '30% deposit; 70% before shipment'
+    assert first['delivery_scope'] == 'factory_only'
+
+    second_payload = {
+        'product_id': confirmed, 'supplier': 'Example Manufacturing Ltd',
+        'source_url': 'https://example.com/supplier/v2', 'unit_price': 8.1,
+        'currency': 'USD', 'moq': 500, 'lead_days': 22,
+        'quote_date': '2026-09-15', 'valid_until': '2026-10-15',
+        'incoterm': 'CIF', 'product_specifications': '1500 W, 220 V, 260 ml tank',
+        'payment_terms': '20% deposit; 80% before shipment',
+        'delivery_scope': 'international_freight',
+        'supersedes_quote_id': first['id']}
+    second = client.post('/api/v1/quotes', headers=HEADERS, json=second_payload).json()
+    assert second['revision'] == 2
+    assert second['root_quote_id'] == first['id']
+    assert second['supersedes_quote_id'] == first['id']
+    assert client.get(f'/api/v1/quotes?product_id={confirmed}').json()['total'] == 2
+    assert client.post('/api/v1/quotes', headers=HEADERS,
+                       json={**second_payload, 'source_url': 'https://example.com/supplier/v3'}).status_code == 409
+
+
+def test_a_quote_revision_cannot_change_supplier_identity(client, confirmed):
+    first = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Example Manufacturing Ltd',
+        'source_url': 'https://example.com/supplier/v1', 'unit_price': 8.4,
+        'currency': 'USD', 'moq': 300, 'lead_days': 25,
+        'quote_date': '2026-09-01'}).json()
+    changed = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Different Supplier Ltd',
+        'source_url': 'https://example.com/supplier/v2', 'unit_price': 8.1,
+        'currency': 'USD', 'moq': 300, 'lead_days': 25,
+        'quote_date': '2026-09-15', 'supersedes_quote_id': first['id']})
+    assert changed.status_code == 422
+    assert 'same supplier identity' in changed.json()['detail']
+
+
+def test_quote_validity_cannot_end_before_the_quote_date(client, confirmed):
+    response = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Example Manufacturing Ltd',
+        'source_url': 'https://example.com/supplier', 'unit_price': 8.4,
+        'currency': 'USD', 'moq': 300, 'lead_days': 25,
+        'quote_date': '2026-09-01', 'valid_until': '2026-08-31'})
+    assert response.status_code == 422
+    assert 'cannot end before' in response.json()['detail']
+
+
 def test_a_non_usd_quote_preserves_its_original_amount_and_currency(client, confirmed):
     quote = client.post('/api/v1/quotes', headers=HEADERS, json={
         'product_id': confirmed, 'supplier': 'Shenzhen Example Ltd',
@@ -157,6 +215,23 @@ def test_a_dated_quote_feeds_and_is_snapshotted_in_a_reproducible_decision(clien
         'product_id': confirmed, 'inputs': inputs, 'quote_id': quote['id'],
         'quote_fx_to_usd': 0.14001})
     assert changed_rate.status_code == 409
+
+
+def test_a_saved_decision_preserves_expiry_and_moq_conflicts(client, confirmed):
+    quote = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Historical Quote Ltd',
+        'source_url': 'https://example.com/historical-quote', 'unit_price': 8.4,
+        'currency': 'USD', 'moq': 500, 'lead_days': 18,
+        'quote_date': '2020-01-01', 'valid_until': '2020-02-01',
+        'incoterm': 'EXW', 'product_specifications': 'Archived supplier specification',
+        'payment_terms': 'Payment before shipment', 'delivery_scope': 'factory_only'}).json()
+    saved = client.post('/api/v1/decisions', headers={**HEADERS, 'Idempotency-Key': 'quote-warnings'}, json={
+        'product_id': confirmed, 'inputs': INPUTS, 'quote_id': quote['id']}).json()
+    assert saved['quote_checks']['validity_state'] == 'expired'
+    assert saved['quote_checks']['quantity_state'] == 'below_moq'
+    assert saved['quote_checks']['required_moq'] == 500
+    assert saved['quote_checks']['scenario_quantity'] == INPUTS['quantity']
+    assert len(saved['quote_checks']['warnings']) == 2
 
 
 def test_a_decision_cannot_misstate_the_selected_quote_conversion(client, confirmed):

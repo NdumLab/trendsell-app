@@ -188,7 +188,7 @@ export function WorkspaceProvider({children}:{children:React.ReactNode}) {
       if(demo){const saved={...result,id:requestKey,product_id:product.id,product_name:product.name,product_asin:product.asin,evidence:product.observations,evidence_version:'demo-fixture/1',threshold_version:THRESHOLD_VERSION,truth_state:'Demo' as const,created_at:new Date().toISOString()};setDemoDecisions(prev=>[saved,...prev.filter(d=>d.id!==requestKey)]);return saved;}
       const saved=await post<Assessment>('/decisions',{product_id:product.id,inputs:result.inputs,quote_id:quoteId,quote_fx_to_usd:quoteFxToUsd},requestKey);await refresh();return saved;
     },
-    saveQuote:async quote=>{if(demo)setDemoQuotes(prev=>[{...quote,id:crypto.randomUUID(),truth_state:'Demo',verification:'Unverified'},...prev]);else{await post('/quotes',quote);await refresh();}},
+    saveQuote:async quote=>{if(demo)setDemoQuotes(prev=>{const parent=quote.supersedes_quote_id?prev.find(item=>item.id===quote.supersedes_quote_id):undefined;return [{...quote,id:crypto.randomUUID(),truth_state:'Demo',verification:'Unverified',revision:parent?(parent.revision??1)+1:1,root_quote_id:parent?.root_quote_id||parent?.id||null},...prev];});else{await post('/quotes',quote);await refresh();}},
   };
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

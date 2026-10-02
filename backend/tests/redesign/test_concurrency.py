@@ -141,3 +141,29 @@ def test_parallel_watches_on_one_product_create_one_rule(clients):
     items = clients[0].get('/api/v1/watchlists/default/items').json()['items']
     assert len(items) == 1
     assert len({r.json()['id'] for r in responses}) == 1
+
+
+def test_parallel_quote_revisions_cannot_fork_one_immutable_version(clients):
+    job = clients[0].post('/api/v1/xray', json={'input': AMAZON},
+                          headers={**HEADERS, 'Idempotency-Key': 'quote-product'}).json()
+    clients[0].post(f'/api/v1/products/{job["product_id"]}/confirm',
+                    json={'name': 'Steamer'}, headers=HEADERS)
+    first = clients[0].post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': job['product_id'], 'supplier': 'Example Manufacturing Ltd',
+        'source_url': 'https://example.com/quote/v1', 'unit_price': 8.4,
+        'currency': 'USD', 'moq': 300, 'lead_days': 25,
+        'quote_date': '2026-09-01'}).json()
+
+    def revise(index):
+        return clients[index].post('/api/v1/quotes', headers=HEADERS, json={
+            'product_id': job['product_id'], 'supplier': 'Example Manufacturing Ltd',
+            'source_url': f'https://example.com/quote/v2-{index}',
+            'unit_price': 8.1 + index / 100, 'currency': 'USD',
+            'moq': 300, 'lead_days': 22, 'quote_date': '2026-09-15',
+            'supersedes_quote_id': first['id']})
+
+    responses = burst(revise)
+    assert sorted(response.status_code for response in responses) == [201] + [409] * (PARALLEL - 1)
+    quotes = clients[0].get(f'/api/v1/quotes?product_id={job["product_id"]}').json()
+    assert quotes['total'] == 2
+    assert sum(item.get('supersedes_quote_id') == first['id'] for item in quotes['quotes']) == 1

@@ -49,6 +49,9 @@ test.describe('a complete manual investigation', () => {
     await form.getByLabel('Minimum order (units)').fill('300');
     await form.getByLabel('Lead time (days)').fill('25');
     await form.getByLabel('Quote date').fill('2026-09-01');
+    await form.getByLabel('Valid until').fill('2026-10-01');
+    await form.getByLabel('Quoted product specifications').fill('1500 W, 220 V, 260 ml tank');
+    await form.getByLabel('Payment terms').fill('30% deposit; 70% before shipment');
     await form.getByRole('button', { name: 'Save quote' }).click();
     await expect(form).toBeHidden();
 
@@ -74,6 +77,9 @@ test.describe('a complete manual investigation', () => {
     await form.getByLabel('Minimum order (units)').fill('300');
     await form.getByLabel('Lead time (days)').fill('25');
     await form.getByLabel('Quote date').fill('2026-09-01');
+    await form.getByLabel('Valid until').fill('2026-10-01');
+    await form.getByLabel('Quoted product specifications').fill('1500 W, 220 V, 260 ml tank');
+    await form.getByLabel('Payment terms').fill('30% deposit; 70% before shipment');
     await form.getByRole('button', { name: 'Save quote' }).click();
     await expect(form).toBeVisible();
     await expect(page.getByText(/https:\/\/ address/).first()).toBeVisible();
