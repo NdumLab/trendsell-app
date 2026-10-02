@@ -10,20 +10,54 @@ from base64 import b64encode
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import math
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from .common import ProviderError
 
 
-DATAFORSEO_COLLECTOR_VERSION = 'dataforseo-live/1.0.0'
-DATAFORSEO_PARSER_VERSION = 'dataforseo-catalog-trends/1.0.0'
-BRIGHTDATA_COLLECTOR_VERSION = 'brightdata-jumia-custom/1.0.0'
-BRIGHTDATA_PARSER_VERSION = 'brightdata-jumia-candidate/1.0.0'
-OXR_COLLECTOR_VERSION = 'open-exchange-rates/latest/1.0.0'
-OXR_PARSER_VERSION = 'open-exchange-rates/1.0.0'
+DATAFORSEO_COLLECTOR_VERSION = 'dataforseo-live/1.1.0'
+DATAFORSEO_PARSER_VERSION = 'dataforseo-catalog-trends/1.1.0'
+BRIGHTDATA_COLLECTOR_VERSION = 'brightdata-jumia-custom/1.1.0'
+BRIGHTDATA_PARSER_VERSION = 'brightdata-jumia-candidate/1.1.0'
+OXR_COLLECTOR_VERSION = 'open-exchange-rates/latest/1.1.0'
+OXR_PARSER_VERSION = 'open-exchange-rates/1.1.0'
+MAX_PROVIDER_RESPONSE_BYTES = 10 * 1024 * 1024
+
+
+def _provider_url(value: object, host_suffix: str, label: str) -> str:
+    """Accept only HTTPS links on the provider contract's expected public host.
+
+    Provider fields are external input even when the provider itself is trusted.  These
+    URLs are later rendered as clickable evidence links, so an unexpected scheme or host
+    must fail the collection instead of becoming an authenticated-workspace link.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ProviderError('invalid_response', f'The provider omitted the required {label}.')
+    candidate = value.strip()
+    try:
+        parsed = urlsplit(candidate)
+        host = (parsed.hostname or '').lower().rstrip('.')
+        port = parsed.port
+    except ValueError as problem:
+        raise ProviderError('invalid_response', f'The provider returned an invalid {label}.') from problem
+    expected = host_suffix.lower().rstrip('.')
+    if (parsed.scheme != 'https' or parsed.username is not None or parsed.password is not None
+            or port not in {None, 443}
+            or not (host == expected or host.endswith(f'.{expected}'))):
+        raise ProviderError('invalid_response', f'The provider returned an unexpected {label}.')
+    return candidate
+
+
+def _first_present(row: dict, *keys: str):
+    """Return the first non-null field without erasing valid zero/false observations."""
+    for key in keys:
+        if key in row and row[key] is not None:
+            return row[key]
+    return None
 
 
 def _iso_provider_datetime(value: str) -> str:
@@ -58,7 +92,12 @@ class JsonClient:
                     status = getattr(response, 'status', None)
                     if status is None and hasattr(response, 'getcode'):
                         status = response.getcode()
-                    return (json.loads(response.read().decode('utf-8')),
+                    body = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+                    if len(body) > MAX_PROVIDER_RESPONSE_BYTES:
+                        raise ProviderError(
+                            'invalid_response',
+                            'The provider response exceeded the configured safety limit.')
+                    return (json.loads(body.decode('utf-8')),
                             dict(response.headers), int(status or 200))
             except HTTPError as problem:
                 retry = problem.code == 429 or 500 <= problem.code < 600
@@ -102,17 +141,53 @@ class DataForSEOClient(JsonClient):
         self._headers = {'Authorization': f'Basic {token}', 'Content-Type': 'application/json'}
 
     def _post(self, path: str, task: dict) -> dict:
-        request = Request(f'{self.endpoint}/{path}', data=json.dumps([task]).encode(),
-                          headers=self._headers, method='POST')
-        payload, _, _ = self._json(request)
-        if not isinstance(payload, dict) or payload.get('status_code') != 20000:
-            raise ProviderError('invalid_response', 'DataForSEO did not return a successful task envelope.')
-        tasks = payload.get('tasks') or []
-        current = tasks[0] if tasks else {}
-        if current.get('status_code') != 20000:
-            message = current.get('status_message') or 'DataForSEO did not complete the requested task.'
-            raise ProviderError('provider_error', message[:300])
-        return current
+        # DataForSEO documents that most provider failures arrive as internal status
+        # codes inside an HTTP 200 response.  Classify and retry those codes here; the
+        # transport retry in JsonClient alone cannot see them.
+        transient = {40101, 40103, 50000, 50001, 50301, 50302, 50303, 50304, 50401, 50402}
+        retryable = transient | {40202, 40209}
+        for attempt in range(self.attempts):
+            request = Request(f'{self.endpoint}/{path}', data=json.dumps([task]).encode(),
+                              headers=self._headers, method='POST')
+            payload, _, _ = self._json(request)
+            if not isinstance(payload, dict):
+                raise ProviderError('invalid_response', 'DataForSEO returned an unreadable task envelope.')
+            envelope_code = payload.get('status_code')
+            tasks = payload.get('tasks') or []
+            current = tasks[0] if tasks and isinstance(tasks[0], dict) else {}
+            code = current.get('status_code') if envelope_code == 20000 else envelope_code
+            if code == 20000:
+                return current
+            if code in retryable and attempt + 1 < self.attempts:
+                self._sleep(min(2 ** attempt, 4))
+                continue
+            if code in {40100, 40104, 40201, 40204, 40207}:
+                raise ProviderError(
+                    'authorization',
+                    f'DataForSEO rejected the configured account or access policy (status {code}).',
+                    'Review account verification, credentials, plan access, and IP allowlisting')
+            if code in {40202, 40205, 40206, 40209}:
+                raise ProviderError(
+                    'rate_limited', f'DataForSEO rate-limited the task (status {code}).',
+                    'Retry after the provider limit resets')
+            if code in {40200, 40203, 40210}:
+                raise ProviderError(
+                    'quota_exceeded', f'DataForSEO refused the task under its balance or cost cap (status {code}).',
+                    'Review the approved provider balance and cost limit before retrying')
+            if code == 40102:
+                raise ProviderError('not_found', 'DataForSEO returned no results for this task.')
+            if code == 40505:
+                raise ProviderError(
+                    'configuration',
+                    'DataForSEO rejected an outdated configured location or language code.',
+                    'Re-verify the configured codes with the authenticated locations endpoint')
+            if code in transient:
+                raise ProviderError(
+                    'provider_error', f'DataForSEO could not complete the task after three attempts (status {code}).',
+                    'Retry after the provider service recovers')
+            raise ProviderError(
+                'provider_error', f'DataForSEO rejected the task (status {code or "unknown"}).')
+        raise ProviderError('provider_error', 'DataForSEO could not complete the task.')
 
     def get_catalog_item(self, asin: str) -> dict:
         task = self._post('merchant/amazon/asin/live/advanced', {
@@ -133,13 +208,14 @@ class DataForSEOClient(JsonClient):
             last = item['categories'][-1]
             category = ((last.get('category') or last.get('name'))
                         if isinstance(last, dict) else str(last))
+        source_url = _provider_url(
+            result.get('check_url') or item.get('url'), 'amazon.com', 'Amazon source URL')
         mapped = {
             'asin': item.get('data_asin') or item.get('asin'),
             'title': item.get('title'), 'brand': item.get('brand'),
             'author': item.get('author'),
             'category': category,
-            'detail_page_url': result.get('check_url') or item.get('url'),
-            'image_url': item.get('image_url'),
+            'detail_page_url': source_url,
             'offer_amount': (item.get('price_from') if item.get('price_from') is not None
                              else price.get('current') if isinstance(price, dict) else None),
             'offer_currency': (item.get('currency') or
@@ -149,7 +225,7 @@ class DataForSEOClient(JsonClient):
             'rating_votes': ((item.get('rating') or {}).get('votes_count')
                              if isinstance(item.get('rating'), dict) else None),
             'observed_at': _iso_provider_datetime(result.get('datetime')),
-            'source_url': result.get('check_url') or item.get('url'),
+            'source_url': source_url,
             'request_id': task.get('id'), 'task_cost_usd': task.get('cost'),
             'provider_item': item,
         }
@@ -168,10 +244,13 @@ class DataForSEOClient(JsonClient):
             asin = item.get('data_asin') or item.get('asin')
             if item.get('type') != 'amazon_serp' or not asin or asin in seen:
                 continue
+            if not item.get('title') or not item.get('url'):
+                continue
+            item_url = _provider_url(item['url'], 'amazon.com', 'Amazon candidate URL')
             seen.add(asin)
             rating = item.get('rating') or {}
             candidate = {
-                'asin': asin, 'title': item.get('title'), 'url': item.get('url'),
+                'asin': asin, 'title': item.get('title'), 'url': item_url,
                 'position': item.get('rank_group'), 'absolute_position': item.get('rank_absolute'),
                 'price_from': item.get('price_from'), 'price_to': item.get('price_to'),
                 'currency': item.get('currency'),
@@ -182,20 +261,21 @@ class DataForSEOClient(JsonClient):
                 'is_best_seller': item.get('is_best_seller'),
                 'result_type': 'organic',
             }
-            if candidate['title'] and candidate['url']:
-                candidates.append({key: value for key, value in candidate.items()
-                                   if value is not None})
+            candidates.append({key: value for key, value in candidate.items()
+                               if value is not None})
             if len(candidates) >= limit:
                 break
         if not candidates:
             raise ProviderError('not_found',
                                 'DataForSEO returned no organic Amazon product candidates for this query.')
+        source_url = _provider_url(
+            result.get('check_url'), 'amazon.com', 'Amazon search source URL')
         return {
             'query': keyword, 'candidates': candidates,
             'observed_at': _iso_provider_datetime(result.get('datetime')),
-            'source_url': result.get('check_url'), 'request_id': task.get('id'),
+            'source_url': source_url, 'request_id': task.get('id'),
             'task_cost_usd': task.get('cost'),
-            'provider_item': {'query': keyword, 'check_url': result.get('check_url'),
+            'provider_item': {'query': keyword, 'check_url': source_url,
                               'items': candidates},
         }
 
@@ -211,17 +291,39 @@ class DataForSEOClient(JsonClient):
             raise ProviderError('not_found', 'DataForSEO Trends returned no search-interest series for this query.')
         series = []
         for point in graph.get('data') or []:
+            if not isinstance(point, dict):
+                raise ProviderError('invalid_response',
+                                    'DataForSEO Trends returned an unreadable series point.')
             values = point.get('values') or []
-            series.append({'date': point.get('date_to') or point.get('date_from'),
-                           'value': values[0] if values else None})
+            date = point.get('date_to') or point.get('date_from')
+            try:
+                datetime.strptime(date, '%Y-%m-%d')
+            except (TypeError, ValueError) as problem:
+                raise ProviderError(
+                    'invalid_response',
+                    'DataForSEO Trends returned a point with an unreadable date.') from problem
+            value = values[0] if isinstance(values, list) and values else None
+            if value is not None and (isinstance(value, bool)
+                                      or not isinstance(value, (int, float))
+                                      or not math.isfinite(value)
+                                      or not 0 <= value <= 100):
+                raise ProviderError(
+                    'invalid_response',
+                    'DataForSEO Trends returned a popularity value outside its documented scale.')
+            # DataForSEO documents 0 as "not enough data", not observed zero
+            # popularity. Store a gap so it cannot lower a trend or count as coverage.
+            series.append({'date': date, 'value': None if value == 0 else value})
         observed_values = [point['value'] for point in series
-                           if isinstance(point.get('value'), (int, float))]
+                           if point.get('value') is not None]
         if not series or not observed_values:
             raise ProviderError('not_found', 'DataForSEO Trends returned an empty search-interest series for this query.')
         observed_at = _iso_provider_datetime(result.get('datetime'))
         return {'query': keyword, 'series': series, 'latest_value': observed_values[-1],
-                'observed_at': observed_at, 'source_url': result.get('check_url') or
-                'https://dataforseo.com/apis/dataforseo-trends-api',
+                # This endpoint does not document a result check_url. Keep the clickable
+                # reference on our reviewed constant instead of trusting an undocumented
+                # provider field that could become an arbitrary authenticated-workspace link.
+                'observed_at': observed_at,
+                'source_url': 'https://dataforseo.com/apis/dataforseo-trends-api',
                 'request_id': task.get('id'), 'task_cost_usd': task.get('cost'),
                 'provider_item': graph}
 
@@ -284,17 +386,22 @@ class BrightDataJumiaClient(JsonClient):
         for row in rows:
             if not isinstance(row, dict):
                 continue
+            title = _first_present(row, 'title', 'name')
+            candidate_url = _first_present(row, 'url', 'product_url')
+            if not title or not candidate_url:
+                continue
             candidate = {
-                'title': row.get('title') or row.get('name'), 'brand': row.get('brand'),
-                'price': row.get('price') or row.get('current_price'),
+                'title': title, 'brand': row.get('brand'),
+                'price': _first_present(row, 'price', 'current_price'),
                 'currency': row.get('currency') or 'NGN',
-                'rating': row.get('rating'), 'rating_count': row.get('rating_count') or row.get('reviews_count'),
-                'availability': row.get('availability') or row.get('in_stock'),
-                'seller': row.get('seller') or row.get('seller_name'),
-                'url': row.get('url') or row.get('product_url'), 'sku': row.get('sku'),
+                'rating': row.get('rating'),
+                'rating_count': _first_present(row, 'rating_count', 'reviews_count'),
+                'availability': _first_present(row, 'availability', 'in_stock'),
+                'seller': _first_present(row, 'seller', 'seller_name'),
+                'url': _provider_url(candidate_url, 'jumia.com.ng', 'Jumia candidate URL'),
+                'sku': row.get('sku'),
             }
-            if candidate['title'] and candidate['url']:
-                candidates.append({key: value for key, value in candidate.items() if value is not None})
+            candidates.append({key: value for key, value in candidate.items() if value is not None})
         observed_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
         return {'query': keyword, 'candidates': candidates, 'observed_at': observed_at,
                 'source_url': inputs[0]['url'],
@@ -349,11 +456,21 @@ class OpenExchangeRatesClient(JsonClient):
         if not isinstance(payload, dict) or payload.get('base') != 'USD':
             raise ProviderError('invalid_response', 'Open Exchange Rates did not return the required USD-base response.')
         rates = payload.get('rates') or {}
-        if not isinstance(payload.get('timestamp'), (int, float)):
+        timestamp = payload.get('timestamp')
+        if (not isinstance(timestamp, (int, float)) or isinstance(timestamp, bool)
+                or not math.isfinite(timestamp) or timestamp <= 0):
             raise ProviderError('invalid_response', 'Open Exchange Rates omitted its UTC observation timestamp.')
-        if not all(isinstance(rates.get(code), (int, float)) for code in ('NGN', 'CNY')):
+        if not all(isinstance(rates.get(code), (int, float))
+                   and not isinstance(rates.get(code), bool)
+                   and math.isfinite(rates[code]) and rates[code] > 0
+                   for code in ('NGN', 'CNY')):
             raise ProviderError('invalid_response', 'Open Exchange Rates omitted NGN or CNY from the response.')
-        observed = datetime.fromtimestamp(payload.get('timestamp'), timezone.utc).isoformat().replace('+00:00', 'Z')
+        try:
+            observed = datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace('+00:00', 'Z')
+        except (OverflowError, OSError, ValueError) as problem:
+            raise ProviderError(
+                'invalid_response',
+                'Open Exchange Rates returned an invalid UTC observation timestamp.') from problem
         return {'base': 'USD', 'usd_ngn': rates['NGN'], 'usd_cny': rates['CNY'],
                 'observed_at': observed, 'source_url': 'https://openexchangerates.org/',
                 'request_id': headers.get('x-request-id') or headers.get('X-Request-Id'),

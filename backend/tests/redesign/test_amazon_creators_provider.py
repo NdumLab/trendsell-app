@@ -424,3 +424,37 @@ def test_disabling_configuration_does_not_erase_collection_history_from_typed_he
         assert catalog['last_success'] == '2000-01-01T00:00:01Z'
         assert catalog['observation_state'] == 'none'
         assert catalog['api_availability_state'] == 'unavailable'
+
+
+def test_a_save_failure_rolls_back_partial_provider_evidence(settings):
+    configured = replace(
+        settings,
+        open_exchange_rates_enabled=True,
+        open_exchange_rates_app_id='app-id',
+        open_exchange_rates_usage_rights='licensed-plan-reference')
+    app = create_app(configured)
+    # Missing usd_cny fails only after the snapshot and evidence objects have been
+    # created inside save_fx.  The provider savepoint must remove both.
+    app.state.collectors['fx'] = type('MalformedFxCollector', (), {
+        'latest': lambda self: {
+            'usd_ngn':1600.0, 'observed_at':'2026-09-30T00:00:00Z',
+            'source_url':'https://openexchangerates.org/',
+            'provider_item':{'timestamp':1790726400, 'base':'USD',
+                             'rates':{'NGN':1600.0}},
+        },
+    })()
+    with TestClient(app) as client:
+        owner = register(client, email='atomic-provider-save@example.com')
+        job = client.post('/api/v1/xray', json={'input':'B0ATOMIC01'},
+                          headers={**HEADERS, 'Idempotency-Key':'atomic-provider-save'}).json()
+        finished = client.get(f'/api/v1/research-jobs/{job["id"]}').json()
+        fx = next(event for event in finished['events'] if event['step'] == 'Reference FX')
+        assert fx['status'] == 'unavailable'
+        assert fx['error_code'] == 'adapter_error'
+        with app.state.database.session() as db:
+            assert not (db.query(Record)
+                        .filter_by(workspace_id=owner['workspace_id'], kind='source_snapshot')
+                        .filter(Record.payload['source_id'].as_string() == 'fx').all())
+            assert not (db.query(Record)
+                        .filter_by(workspace_id=owner['workspace_id'], kind='evidence')
+                        .filter(Record.payload['source_id'].as_string() == 'fx').all())

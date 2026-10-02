@@ -1849,7 +1849,12 @@ def create_app(settings=None):
                 db.commit()
                 try:
                     collected = call(collector)
-                    detail, snapshot_id = save(collected)
+                    # A parser/save failure must not leave a snapshot or evidence row
+                    # behind while the same event is reported as unavailable.  The
+                    # collecting status above is already committed; this savepoint makes
+                    # each provider's normalized result atomic within the job.
+                    with db.begin_nested():
+                        detail, snapshot_id = save(collected)
                 except ProviderError as problem:
                     p = dict(row.payload)
                     p['events'] = p['events'] + [{
