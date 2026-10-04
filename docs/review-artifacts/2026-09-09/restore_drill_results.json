@@ -1,0 +1,43 @@
+{
+  "dump_bytes": 45277,
+  "source_revision": "0004_account_recovery",
+  "restored_revision": "0004_account_recovery",
+  "source_records_by_kind": {
+    "compliance_review": 2,
+    "decision": 2,
+    "evidence": 8,
+    "job": 2,
+    "product": 2
+  },
+  "restored_records_by_kind": {
+    "compliance_review": 2,
+    "decision": 2,
+    "evidence": 8,
+    "job": 2,
+    "product": 2
+  },
+  "records_match": true,
+  "workspaces_source": {
+    "e953a27b-2663-477b-aa31-f61e6c7509e6": {
+      "name": "Shared workspace name",
+      "records": 8
+    },
+    "1d9e726a-02be-4db8-a48c-229781154abd": {
+      "name": "Shared workspace name",
+      "records": 8
+    }
+  },
+  "workspaces_restored": {
+    "1d9e726a-02be-4db8-a48c-229781154abd": {
+      "name": "Shared workspace name",
+      "records": 8
+    },
+    "e953a27b-2663-477b-aa31-f61e6c7509e6": {
+      "name": "Shared workspace name",
+      "records": 8
+    }
+  },
+  "per_workspace_match": true,
+  "source_replay_failures": [],
+  "restored_replay_failures": []
+}

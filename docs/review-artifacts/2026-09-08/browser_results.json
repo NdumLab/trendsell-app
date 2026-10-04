@@ -1,0 +1,11 @@
+{
+  "detail_confidence": 60,
+  "draft_confidence": 0,
+  "saved_confidence": 60,
+  "draft_decision": "INSUFFICIENT EVIDENCE",
+  "saved_decision": "WATCH",
+  "draft_evidence_count": 0,
+  "saved_evidence_count": 4,
+  "draft_evidence_version": "no-observations/1",
+  "verdict_text": "YOUR CURRENT DECISION\nCalculated\nNeeds evidence\n\nYour scenario is calculated. Demand and import readiness still need evidence.\n\nBase contribution margin\n75.7\n%\nEvidence coverage\n0\n/ 100\nCoverage incomplete · import readiness unresolved"
+}

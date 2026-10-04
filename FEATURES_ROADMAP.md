@@ -1,5 +1,10 @@
 # TrendSell — Features Roadmap
 
+> Historical prototype backlog. Superseded for execution on 8 September 2026 by the
+> [detailed action plan](docs/ACTION_PLAN.md). The priorities and capability descriptions below
+> describe the retired prototype; they are not the active application's implementation order or
+> verified capabilities. Sales-driver and supplier intelligence remain in the current plan.
+
 Curated backlog of features to borrow / adapt from successful e-commerce
 sourcing & intelligence platforms, plus original TrendSell-only ideas.
 

@@ -1,5 +1,9 @@
 # TrendSell — PRD
 
+> Historical synthetic-prototype PRD. The active evidence platform uses a different architecture
+> and scope. Follow the [current action plan](../docs/ACTION_PLAN.md) and [README](../README.md);
+> the implementation and certification claims below do not describe the current application.
+
 ## Problem
 Global product & sales intelligence dashboard: what's trending, why it's selling, where to source it, calibrated to any of 46 markets.
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=Check TrendSell backup freshness every six hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+RandomizedDelaySec=5m
+AccuracySec=1m
+Persistent=true
+Unit=trendsell-backup-check.service
+
+[Install]
+WantedBy=timers.target

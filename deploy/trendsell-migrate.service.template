@@ -1,0 +1,34 @@
+# One-shot schema migration. Migration credentials live in migration.env and are never
+# loaded by the long-running web service.
+[Unit]
+Description=Migrate the TrendSell PostgreSQL schema
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/trendsell/migration.env
+
+[Service]
+Type=oneshot
+User=trendsell-migrate
+Group=trendsell-migrate
+WorkingDirectory=/opt/trendsell/current/backend
+EnvironmentFile=/etc/trendsell/migration.env
+ExecStart=/opt/trendsell/venv/bin/python -m app.migrate upgrade
+ExecStart=/opt/trendsell/venv/bin/python -m app.migrate check
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+ReadOnlyPaths=/opt/trendsell /etc/trendsell

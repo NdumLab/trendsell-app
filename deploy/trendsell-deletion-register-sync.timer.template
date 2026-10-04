@@ -1,0 +1,11 @@
+[Unit]
+Description=Reconcile TrendSell deletion-register offsite copies
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=trendsell-deletion-register-sync.service
+
+[Install]
+WantedBy=timers.target

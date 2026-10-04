@@ -1,0 +1,41 @@
+{
+  "reset_token_after_password_change": {
+    "reset_status": 400,
+    "expected_status": 400,
+    "changed_password_login": 200,
+    "reset_password_login": 401
+  },
+  "punctuation_only_classification": {
+    "approval_status": 422,
+    "expected_status": 422,
+    "gate": {
+      "resolved": false,
+      "status": "requested",
+      "review_id": "4c04f2e3-ccdc-4ada-b2de-93f1cce76934",
+      "reason": "A review has been requested and is waiting for a reviewer."
+    }
+  },
+  "legacy_incomplete_approval": {
+    "gate": {
+      "resolved": false,
+      "status": "requested",
+      "review_id": "4c04f2e3-ccdc-4ada-b2de-93f1cce76934",
+      "reason": "A review has been requested and is waiting for a reviewer."
+    },
+    "expected_resolved": false
+  },
+  "pre_router_metrics_paths": {
+    "new_labels": 1,
+    "expected_at_most": 1,
+    "raw_marker_retained": false,
+    "owner_metrics_status": 403
+  },
+  "concurrent_reset_single_use": {
+    "statuses": [
+      200,
+      400
+    ],
+    "expected_successes": 1,
+    "actual_successes": 1
+  }
+}

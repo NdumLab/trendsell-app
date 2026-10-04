@@ -1,0 +1,30 @@
+{
+  "note": "Supported capture inputs for the pilot. backend/tests/redesign/test_identifier_contract.py and frontend/src/features/xray.contract.test.ts must agree on every case.",
+  "supported_marketplace": "Amazon US",
+  "accepted": [
+    {"input": "B0ABCDEFGH", "asin": "B0ABCDEFGH", "why": "bare ASIN"},
+    {"input": "b0abcdefgh", "asin": "B0ABCDEFGH", "why": "ASINs are upper-cased"},
+    {"input": "  B0ABCDEFGH  ", "asin": "B0ABCDEFGH", "why": "surrounding whitespace is trimmed"},
+    {"input": "https://www.amazon.com/dp/B0ABCDEFGH", "asin": "B0ABCDEFGH", "why": "canonical product URL"},
+    {"input": "https://amazon.com/dp/B0ABCDEFGH", "asin": "B0ABCDEFGH", "why": "apex host"},
+    {"input": "https://www.amazon.com/gp/product/B0ABCDEFGH", "asin": "B0ABCDEFGH", "why": "legacy product path"},
+    {"input": "https://www.amazon.com/Portable-Garment-Steamer/dp/B0ABCDEFGH/ref=sr_1_3", "asin": "B0ABCDEFGH", "why": "slug and tracking segments"},
+    {"input": "https://www.amazon.com/dp/B0ABCDEFGH?th=1&psc=1", "asin": "B0ABCDEFGH", "why": "query string is ignored"}
+  ],
+  "rejected": [
+    {"input": "http://www.amazon.com/dp/B0ABCDEFGH", "why": "not https"},
+    {"input": "https://www.amazon.co.uk/dp/B0ABCDEFGH", "why": "unsupported marketplace"},
+    {"input": "https://www.amazon.com.evil.example/dp/B0ABCDEFGH", "why": "look-alike host"},
+    {"input": "https://amzn.to/3xShortLink", "why": "short link would require following a redirect"},
+    {"input": "https://user:pass@www.amazon.com/dp/B0ABCDEFGH", "why": "credentials in the URL"},
+    {"input": "https://www.amazon.com:8443/dp/B0ABCDEFGH", "why": "non-standard port"},
+    {"input": "https://127.0.0.1/dp/B0ABCDEFGH", "why": "loopback address"},
+    {"input": "https://169.254.169.254/latest/meta-data/", "why": "link-local metadata service"},
+    {"input": "https://192.168.0.10/dp/B0ABCDEFGH", "why": "private network address"},
+    {"input": "https://www.amazon.com/s?k=garment+steamer", "why": "a search page, not a product"},
+    {"input": "https://www.amazon.com/dp/B0ABCDEFG", "why": "identifier is not ten characters"},
+    {"input": "file:///etc/passwd", "why": "not an http(s) URL"},
+    {"input": "javascript:alert(1)", "why": "not an http(s) URL"},
+    {"input": "not a product at all", "why": "free text is not an identifier"}
+  ]
+}

@@ -1,0 +1,24 @@
+[Unit]
+Description=Verify and copy TrendSell deletion intent off host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=trendsell
+Group=trendsell
+WorkingDirectory=/opt/trendsell/current
+EnvironmentFile=/etc/trendsell/trendsell.env
+EnvironmentFile=/etc/trendsell/backup-s3.env
+ExecStart=/opt/trendsell/current/scripts/sync_deletion_register.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+ReadOnlyPaths=/opt/trendsell /etc/trendsell /var/lib/trendsell/deletions
