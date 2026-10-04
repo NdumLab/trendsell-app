@@ -1,14 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { calculate, FORMULA_VERSION, THRESHOLD_VERSION, type EvidenceGate } from '@/lib/economics';
+import { calculate, COST_MODEL_VERSION, FORMULA_VERSION, THRESHOLD_VERSION, type EvidenceGate } from '@/lib/economics';
 import { ceilUnits, divRound, fromDecimalString, money, parse, quantize, toNumber, UNIT } from '@/lib/money';
 import type { Inputs } from '@/types';
 
 interface Case { name: string; inputs: Inputs; evidence: EvidenceGate; expected: ReturnType<typeof calculate> }
 const read = (file: string) => JSON.parse(readFileSync(new URL(`../../../contracts/${file}`, import.meta.url), 'utf8')) as
-  { formula_version: string; threshold_version: string; cases: Case[] };
+  { formula_version: string; threshold_version: string; cost_model_version?: string; cases: Case[] };
 const contract = read('economics_cases.json');
 const legacy = read('economics_legacy_cases.json');
+const v1_1 = read('economics_v1_1_cases.json');
 /** Two decimal places need value*100 to stay an exact integer double. */
 const EXACT_MONEY_LIMIT = Number.MAX_SAFE_INTEGER / 100;
 
@@ -16,6 +17,7 @@ describe('shared decision contract', () => {
   it('pins the formula and threshold versions the backend generated it with', () => {
     expect(contract.formula_version).toBe(FORMULA_VERSION);
     expect(contract.threshold_version).toBe(THRESHOLD_VERSION);
+    expect(contract.cost_model_version).toBe(COST_MODEL_VERSION);
   });
 
   it.each(contract.cases.map(c => [c.name, c] as const))('%s matches the server result exactly', (_name, testCase) => {
@@ -68,6 +70,15 @@ describe('shared decision contract', () => {
 });
 
 describe('superseded formula versions still replay', () => {
+  it('freezes the former exact-decimal version separately', () => {
+    expect(v1_1.formula_version).toBe('unit-economics/1.1.0');
+    expect(v1_1.formula_version).not.toBe(FORMULA_VERSION);
+  });
+
+  it.each(v1_1.cases.map(c => [c.name, c] as const))('%s replays under 1.1.0', (_name, testCase) => {
+    expect(calculate(testCase.inputs, testCase.evidence, v1_1.formula_version, v1_1.threshold_version)).toEqual(testCase.expected);
+  });
+
   it('is frozen at a version that is no longer the current one', () => {
     expect(legacy.formula_version).toBe('unit-economics/1.0.0');
     expect(legacy.formula_version).not.toBe(FORMULA_VERSION);

@@ -1,22 +1,34 @@
 """The saved-decision contract. The frontend asserts the same files in economics.contract.test.ts."""
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from app import money as m
-from app.economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate
+from app.economics import COST_MODEL_VERSION, FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate
 
 CONTRACTS = Path(__file__).resolve().parents[3] / 'contracts'
 CONTRACT = json.loads((CONTRACTS / 'economics_cases.json').read_text())
 LEGACY = json.loads((CONTRACTS / 'economics_legacy_cases.json').read_text())
+V1_1 = json.loads((CONTRACTS / 'economics_v1_1_cases.json').read_text())
 CASES = [pytest.param(case, id=case['name']) for case in CONTRACT['cases']]
 LEGACY_CASES = [pytest.param(case, id=case['name']) for case in LEGACY['cases']]
+V1_1_CASES = [pytest.param(case, id=case['name']) for case in V1_1['cases']]
 
 
 def test_contract_pins_the_current_formula_version():
     assert CONTRACT['formula_version'] == FORMULA_VERSION
     assert CONTRACT['threshold_version'] == THRESHOLD_VERSION
+    assert CONTRACT['cost_model_version'] == COST_MODEL_VERSION
+
+
+def test_generated_contract_has_not_drifted_from_the_backend():
+    completed = subprocess.run(
+        [sys.executable, str(CONTRACTS.parent / 'scripts' / 'generate_economics_contract.py'), '--check'],
+        cwd=CONTRACTS.parent, capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.parametrize('case', CASES)
@@ -82,6 +94,18 @@ def test_the_reviewed_rounding_disagreement_is_pinned():
 
 
 # --- Replay of superseded formula versions -----------------------------------------
+
+def test_the_previous_exact_decimal_contract_is_frozen():
+    assert V1_1['formula_version'] == 'unit-economics/1.1.0'
+    assert V1_1['formula_version'] != FORMULA_VERSION
+
+
+@pytest.mark.parametrize('case', V1_1_CASES)
+def test_a_v1_1_assessment_still_replays_to_its_saved_values(case):
+    replayed = calculate(Inputs(**case['inputs']), case['evidence'],
+                         formula_version=V1_1['formula_version'],
+                         threshold_version=V1_1['threshold_version'])
+    assert replayed == case['expected']
 
 def test_the_legacy_contract_is_frozen_at_its_own_version():
     assert LEGACY['formula_version'] == 'unit-economics/1.0.0'

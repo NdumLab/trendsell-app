@@ -112,14 +112,19 @@ export interface Source { id: string; name: string; category: string; markets: s
   retention_days: number | null }
 export interface Inputs {
   quantity: number; unit_cost_usd: number; fx_ngn: number; freight_ngn: number; duty_pct: number;
-  import_tax_pct: number; selling_price_ngn: number; channel_fee_pct: number; returns_pct: number;
-  marketing_ngn: number; fixed_cost_ngn: number; stress_pct: number;
+  packaging_ngn: number; insurance_ngn: number; clearance_ngn: number; local_delivery_ngn: number;
+  import_tax_pct: number; fx_buffer_pct: number; selling_price_ngn: number;
+  channel_fee_pct: number; payment_fee_pct: number; returns_pct: number;
+  marketing_ngn: number; fixed_cost_ngn: number; reserve_ngn: number;
+  supplier_deposit_pct: number; cash_tied_up_days: number; stress_pct: number;
   compliance: 'unresolved' | 'prohibited'; channel: string; shipping: 'Air' | 'Sea';
 }
 export interface Scenario {
   name: string; supplier: number; freight: number; duty: number; import_tax: number; landed_cost: number;
   price: number; fees: number; returns: number; marketing: number; overhead: number;
   contribution: number; margin_pct: number; cash_required: number; break_even_cac: number; break_even_units: number | null;
+  fx_buffer?: number; packaging?: number; insurance?: number; clearance?: number; local_delivery?: number;
+  payment_fees?: number; reserve?: number; supplier_deposit_cash?: number; cash_tied_up_days?: number;
 }
 /** Saved economics inputs/calculations are immutable and self-contained. Provider evidence
  * copies may later become explicit retention tombstones, so expired data cannot remain usable. */
@@ -134,15 +139,25 @@ export interface Assessment {
   quote_conversion?: { source_currency: string; rate_to_usd: number; effective_unit_cost_usd: number; truth_state: Truth } | null;
   quote_checks?: { evaluated_at: string; valid_until: string | null;
     validity_state: 'current'|'expired'|'not_recorded'; required_moq: number;
-    scenario_quantity: number; quantity_state: 'meets_moq'|'below_moq'; warnings: string[] } | null;
+    scenario_quantity: number; quantity_state: 'meets_moq'|'below_moq'; warnings: string[];
+    cost_inclusions?: { basis: 'explicit_quote_record'|'legacy_not_recorded'; declared_included: QuoteIncludedCost[];
+      separate_inputs_checked: string[]; double_counting: boolean } } | null;
+  cost_model_version?: string;
+  cost_lineage?: { key: keyof Inputs; label: string; value: number; unit: string; truth_state: Truth;
+    source: { kind: 'decision_input'|'supplier_quote'; label: string; record_id?: string; quote_date?: string };
+    input_author: string; recorded_at: string }[];
+  landed_cost_method?: { version: string; truth_state: Truth; duty_basis: string; import_tax_basis: string;
+    missing_cost_policy: string; incoterm_policy: string };
   economics?: { base_margin_pct: number; downside_margin_pct: number; contribution: number; break_even_units: number | null; viable: boolean; failures: string[]; threshold_version: string };
   evidence_retention_applied_at?: string; expired_evidence_count?: number;
 }
 export interface Watch { id: string; product_id: string; product_name?: string | null; product_decision?: Decision; latest_assessment?: LatestAssessment | null; threshold_pct: number; status: string; scheduled: boolean; created_at: string }
+export type QuoteIncludedCost = 'packaging'|'insurance'|'international_freight'|'import_duty'|'import_tax'|'customs_clearance'|'local_delivery';
 export interface Quote { id: string; product_id: string; product_name?: string | null; supplier: string; source_url: string;
-  unit_price?: number; unit_price_usd?: number; currency: string; moq: number; lead_days: number; quote_date: string; incoterm: string;
+  unit_price?: number; unit_price_usd?: number; currency: string; moq: number; lead_days: number; quote_date: string; incoterm?: string | null;
   valid_until?: string | null; product_specifications?: string; payment_terms?: string;
   delivery_scope?: 'unspecified'|'factory_only'|'international_freight'|'international_and_local_delivery';
+  included_costs?: QuoteIncludedCost[];
   supersedes_quote_id?: string | null; root_quote_id?: string | null; revision?: number;
   notes: string; truth_state: Truth; verification: string; input_author?: string; recorded_at?: string }
 

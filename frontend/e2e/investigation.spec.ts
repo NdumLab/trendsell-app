@@ -20,7 +20,7 @@ test.describe('a complete manual investigation', () => {
     await page.getByRole('button', { name: /Saved decisions/ }).click();
     const history = page.getByRole('dialog');
     await expect(history.getByRole('heading', { name })).toBeVisible();
-    await expect(history.getByText('unit-economics/1.1.0')).toBeVisible();
+    await expect(history.getByText('unit-economics/1.2.0')).toBeVisible();
     await page.getByRole('button', { name: 'Close dialog' }).click();
 
     await page.goto('/discover');

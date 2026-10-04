@@ -18,7 +18,9 @@ claims about what this release already supports.
 Operational and policy documents: [runbook](docs/RUNBOOK.md) for schema, release, rollback and
 recovery; [permissions, privacy and retention](docs/PRIVACY_AND_PERMISSIONS.md) for what the
 pilot enforces and stores, and what it does not; [production readiness](docs/PRODUCTION_READINESS.md)
-for the current deployment decision and unresolved owner actions.
+for the current deployment decision and unresolved owner actions; and the
+[truth and drift contract](docs/TRUTH_AND_DRIFT_CONTRACT.md) for the fail-closed rules every
+feature and release must preserve.
 
 ## Selected release tier
 
@@ -65,9 +67,9 @@ Consequences that are enforced, not aspirational:
 | Sales drivers | Product-level advertising, creator, search and marketplace evidence. Signals are presented as association, never causal attribution; absent spend, ROAS, revenue, seller count and sales history stay unavailable |
 | Evidence coverage | A versioned, explainable score (`evidence-quality/1.1.0`) with a component-by-component breakdown. Self-reported evidence is capped below the confidence a GO needs |
 | Import readiness | Request a review, and a workspace reviewer approves, rejects or asks for more. An approval cites its official sources and expires. A dropdown cannot clear this gate |
-| Decision Room | Editable unit economics, three scenarios, cost waterfall, sensitivity, saved assessments. A dated supplier quote can populate MOQ/cost and is snapshotted with explicit non-USD conversion. Coverage, confidence and compliance come from the server, not the browser |
+| Decision Room | Explicit packaging, insurance, freight, clearance, local delivery, duty/tax, channel/payment, returns, reserve, FX-buffer and cash-timing inputs; three deterministic scenarios, cost waterfall, sensitivity and immutable assessments. Every current cost is supplied explicitly and saved with lineage. A dated supplier quote can populate MOQ/cost, preserve non-USD conversion and declare exact included costs; separate duplicates are rejected. Coverage, confidence and compliance come from the server, not the browser |
 | Watchlist | Saved watches and materiality thresholds. Scheduled collection and delivery are **not** enabled, and the screen says so |
-| Suppliers | User-recorded quotes preserving original amount, currency, MOQ, terms, date, source and author; RFQ drafts are not sent on your behalf |
+| Suppliers | User-recorded immutable quote revisions preserving original amount, currency, MOQ, specifications, terms, validity, explicit cost inclusions, date, source and author; RFQ drafts are not sent on your behalf |
 | Data Health | Every required source, with typed adapter, configuration, collection outcome, freshness, stored-observation and API-availability states. The API never claims browser display; browser tests and an authorised real-data check prove that separately |
 | Market Gaps | Corridor view that reports insufficient evidence rather than an untapped opportunity |
 
@@ -89,7 +91,7 @@ discovery is implemented for the selected DataForSEO pilot but remains disabled 
 Follow [docs/ACTION_PLAN.md](docs/ACTION_PLAN.md) for implementation order.
 `TrendSell_Complete_Redesign_Plan-1.docx` remains the broader product-vision reference.
 
-Workspace export schema `trendsell-workspace-export/3` includes catalog source snapshots,
+Workspace export schema `trendsell-workspace-export/4` includes catalog source snapshots,
 workspace-scoped source health, original-currency quotes, and quote snapshots/conversions on
 saved decisions. Older saved assessments retain immutable formula inputs, calculations and
 versions. Provider evidence payloads are removed at expiry and replaced in historical assessments
@@ -108,7 +110,7 @@ by explicit retention tombstones, so an expired observation cannot continue to a
 backend/app/      main.py (routes) · db.py (models) · economics.py (decision maths) · security.py · settings.py
 backend/tests/    redesign/ — auth, tenancy, X-Ray, jobs, decisions, contract parity
 frontend/src/     features/ (Today, Xray, Products, DecisionRoom, Operations) · shared/ · lib/
-contracts/        economics_cases.json · identifier_cases.json
+contracts/        current + frozen economics cases · evidence cases · identifier cases
 prototype/        the retired synthetic prototype, kept for reference only
 ```
 
@@ -141,8 +143,9 @@ cd frontend && npm test                          # decision contract, identifier
 cd frontend && npm run typecheck && npm run build
 ```
 
-`contracts/economics_cases.json` is asserted by both suites, so a change to the decision maths on
-one side fails on the other. `contracts/identifier_cases.json` does the same for the inputs X-Ray
+`contracts/economics_cases.json` is generated reproducibly and asserted by both suites, so a change
+to the decision maths on one side fails on the other. Frozen 1.1 and 1.0 contracts protect historical
+replay. `contracts/identifier_cases.json` does the same for the inputs X-Ray
 accepts — including the URLs it must refuse, since TrendSell never fetches a user-supplied address.
 
 CI runs backend tests, frontend type-check/tests/build, reproducible clean-clone release builds,

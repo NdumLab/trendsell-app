@@ -2,12 +2,16 @@
 import pytest
 
 from app.economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate
+from app.main import COST_LINE_ITEMS
 from conftest import HEADERS
 
 AMAZON = 'https://www.amazon.com/dp/B0ABCDEFGH'
 INPUTS = {'quantity': 300, 'unit_cost_usd': 8.4, 'fx_ngn': 1500, 'freight_ngn': 900000, 'duty_pct': 5,
           'import_tax_pct': 7.5, 'selling_price_ngn': 32000, 'channel_fee_pct': 5, 'returns_pct': 3,
           'marketing_ngn': 300000, 'fixed_cost_ngn': 150000, 'stress_pct': 10,
+          'packaging_ngn': 0, 'insurance_ngn': 0, 'clearance_ngn': 0, 'local_delivery_ngn': 0,
+          'payment_fee_pct': 0, 'reserve_ngn': 0, 'fx_buffer_pct': 0,
+          'supplier_deposit_pct': 0, 'cash_tied_up_days': 0,
           'compliance': 'unresolved', 'channel': 'Direct sales', 'shipping': 'Air'}
 
 
@@ -39,9 +43,39 @@ def test_a_saved_decision_keeps_its_inputs_and_versions(client, confirmed):
     assert saved['inputs'] == INPUTS
     assert saved['formula_version'] == FORMULA_VERSION
     assert saved['threshold_version'] == THRESHOLD_VERSION
+    assert saved['cost_model_version'] == 'landed-cost/2.0.0'
     assert saved['input_truth_state'] == 'User input'
     assert saved['truth_state'] == 'Calculated'
+    assert len(saved['cost_lineage']) == 19
+    assert {line['truth_state'] for line in saved['cost_lineage']} == {'User input'}
+    assert saved['landed_cost_method']['missing_cost_policy'].startswith('Every current cost input')
     assert saved['created_at'] and saved['id']
+
+
+def test_a_new_decision_cannot_turn_omitted_costs_into_zero(client, confirmed):
+    old_shape = {key: value for key, value in INPUTS.items()
+                 if key not in {'packaging_ngn', 'insurance_ngn', 'clearance_ngn',
+                                'local_delivery_ngn', 'payment_fee_pct', 'reserve_ngn',
+                                'fx_buffer_pct', 'supplier_deposit_pct', 'cash_tied_up_days'}}
+    response = save(client, confirmed, key='missing-costs', inputs=old_shape)
+    assert response.status_code == 422
+    detail = str(response.json()['detail'])
+    assert 'requires explicit values' in detail
+    assert 'insurance_ngn' in detail
+
+
+def test_a_new_decision_cannot_invent_route_labels(client, confirmed):
+    for field in ('channel', 'shipping'):
+        response = save(
+            client, confirmed, key=f'missing-{field}',
+            inputs={key: value for key, value in INPUTS.items() if key != field})
+        assert response.status_code == 422
+        assert field in str(response.json()['detail'])
+
+
+def test_every_formula_cost_input_has_a_lineage_definition():
+    expected = set(Inputs.model_fields) - {'quantity', 'stress_pct', 'compliance', 'channel', 'shipping'}
+    assert {key for key, _label, _unit in COST_LINE_ITEMS} == expected
 
 
 def test_a_saved_decision_is_reproducible_from_its_stored_payload(client, confirmed):
@@ -54,7 +88,7 @@ def test_a_saved_decision_is_reproducible_from_its_stored_payload(client, confir
 def test_a_saved_decision_records_the_version_it_must_be_replayed_under(client, confirmed):
     """A stored assessment is replayed with its own formula version, never the current one."""
     saved = client.get(f'/api/v1/decisions/{save(client, confirmed).json()["id"]}').json()
-    assert saved['formula_version'] in {'unit-economics/1.0.0', 'unit-economics/1.1.0'}
+    assert saved['formula_version'] in {'unit-economics/1.0.0', 'unit-economics/1.1.0', 'unit-economics/1.2.0'}
     under_legacy = calculate(Inputs(**saved['inputs']), formula_version='unit-economics/1.0.0')
     assert under_legacy['formula_version'] == 'unit-economics/1.0.0'
     assert under_legacy['formula_version'] != saved['formula_version']
@@ -118,6 +152,23 @@ def test_a_quote_is_stored_as_unverified_user_input(client, confirmed):
     assert quote['unit_price'] == 8.4
     assert quote['currency'] == 'USD'
     assert quote['recorded_at']
+    assert 'included_costs' not in quote
+
+
+def test_missing_quote_facts_remain_unknown_instead_of_becoming_defaults(client, confirmed):
+    missing_incoterm = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Legacy Client Ltd',
+        'source_url': 'https://example.com/legacy-client', 'unit_price_usd': 8.4,
+        'moq': 300, 'lead_days': 25, 'quote_date': '2026-09-01'}).json()
+    assert 'incoterm' not in missing_incoterm
+    assert 'included_costs' not in missing_incoterm
+
+    implicit_currency = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Ambiguous Currency Ltd',
+        'source_url': 'https://example.com/ambiguous-currency', 'unit_price': 8.4,
+        'moq': 300, 'lead_days': 25, 'quote_date': '2026-09-01'})
+    assert implicit_currency.status_code == 422
+    assert 'Currency must be explicit' in str(implicit_currency.json()['detail'])
 
 
 def test_a_quote_records_explicit_commercial_scope_and_immutable_revisions(client, confirmed):
@@ -142,7 +193,7 @@ def test_a_quote_records_explicit_commercial_scope_and_immutable_revisions(clien
         'quote_date': '2026-09-15', 'valid_until': '2026-10-15',
         'incoterm': 'CIF', 'product_specifications': '1500 W, 220 V, 260 ml tank',
         'payment_terms': '20% deposit; 80% before shipment',
-        'delivery_scope': 'international_freight',
+        'delivery_scope': 'international_freight', 'included_costs': ['international_freight'],
         'supersedes_quote_id': first['id']}
     second = client.post('/api/v1/quotes', headers=HEADERS, json=second_payload).json()
     assert second['revision'] == 2
@@ -231,7 +282,45 @@ def test_a_saved_decision_preserves_expiry_and_moq_conflicts(client, confirmed):
     assert saved['quote_checks']['quantity_state'] == 'below_moq'
     assert saved['quote_checks']['required_moq'] == 500
     assert saved['quote_checks']['scenario_quantity'] == INPUTS['quantity']
-    assert len(saved['quote_checks']['warnings']) == 2
+    assert len(saved['quote_checks']['warnings']) == 3
+    assert any('no explicit cost-inclusion list' in warning
+               for warning in saved['quote_checks']['warnings'])
+
+
+def test_explicit_quote_inclusions_prevent_double_counting(client, confirmed):
+    quote = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Included Freight Ltd',
+        'source_url': 'https://example.com/included-freight', 'unit_price': 8.4,
+        'currency': 'USD', 'moq': 300, 'lead_days': 18, 'quote_date': '2026-09-01',
+        'incoterm': 'CIF', 'delivery_scope': 'international_freight',
+        'included_costs': ['international_freight', 'insurance']}).json()
+    doubled = client.post('/api/v1/decisions', headers={**HEADERS, 'Idempotency-Key': 'doubled'}, json={
+        'product_id': confirmed, 'inputs': INPUTS, 'quote_id': quote['id']})
+    assert doubled.status_code == 422
+    assert 'avoid double counting' in doubled.json()['detail']
+    assert 'international freight' in doubled.json()['detail']
+
+    explicit_zeroes = {**INPUTS, 'freight_ngn': 0, 'insurance_ngn': 0}
+    saved = client.post('/api/v1/decisions', headers={**HEADERS, 'Idempotency-Key': 'not-doubled'}, json={
+        'product_id': confirmed, 'inputs': explicit_zeroes, 'quote_id': quote['id']}).json()
+    inclusions = saved['quote_checks']['cost_inclusions']
+    assert inclusions['basis'] == 'explicit_quote_record'
+    assert inclusions['declared_included'] == ['international_freight', 'insurance']
+    assert inclusions['double_counting'] is False
+
+
+def test_an_incoterm_without_explicit_inclusions_does_not_suppress_costs(client, confirmed):
+    quote = client.post('/api/v1/quotes', headers=HEADERS, json={
+        'product_id': confirmed, 'supplier': 'Unspecified CIF Ltd',
+        'source_url': 'https://example.com/unspecified-cif', 'unit_price': 8.4,
+        'currency': 'USD', 'moq': 300, 'lead_days': 18, 'quote_date': '2026-09-01',
+        'incoterm': 'CIF', 'included_costs': []}).json()
+    assert quote['included_costs'] == []
+    saved = client.post('/api/v1/decisions', headers={**HEADERS, 'Idempotency-Key': 'cif-context'}, json={
+        'product_id': confirmed, 'inputs': INPUTS, 'quote_id': quote['id']}).json()
+    assert saved['inputs']['freight_ngn'] == INPUTS['freight_ngn']
+    assert any('Incoterm alone does not prove' in warning
+               for warning in saved['quote_checks']['warnings'])
 
 
 def test_a_decision_cannot_misstate_the_selected_quote_conversion(client, confirmed):

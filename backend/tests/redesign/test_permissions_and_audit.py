@@ -25,6 +25,9 @@ AMAZON = 'https://www.amazon.com/dp/B0ABCDEFGH'
 INPUTS = {'quantity': 300, 'unit_cost_usd': 8.4, 'fx_ngn': 1500, 'freight_ngn': 900000, 'duty_pct': 5,
           'import_tax_pct': 7.5, 'selling_price_ngn': 32000, 'channel_fee_pct': 5, 'returns_pct': 3,
           'marketing_ngn': 300000, 'fixed_cost_ngn': 150000, 'stress_pct': 10,
+          'packaging_ngn': 0, 'insurance_ngn': 0, 'clearance_ngn': 0, 'local_delivery_ngn': 0,
+          'payment_fee_pct': 0, 'reserve_ngn': 0, 'fx_buffer_pct': 0,
+          'supplier_deposit_pct': 0, 'cash_tied_up_days': 0,
           'compliance': 'unresolved', 'channel': 'Direct sales', 'shipping': 'Air'}
 
 

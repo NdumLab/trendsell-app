@@ -4,7 +4,10 @@ import type { Inputs } from '@/types';
 
 const INPUTS: Inputs = {
   quantity: 300, unit_cost_usd: 8.4, fx_ngn: 1500, freight_ngn: 900000, duty_pct: 5, import_tax_pct: 7.5,
-  selling_price_ngn: 32000, channel_fee_pct: 5, returns_pct: 3, marketing_ngn: 300000, fixed_cost_ngn: 150000,
+  packaging_ngn: 90000, insurance_ngn: 75000, clearance_ngn: 180000, local_delivery_ngn: 120000,
+  fx_buffer_pct: 2, selling_price_ngn: 32000, channel_fee_pct: 4, payment_fee_pct: 1, returns_pct: 3,
+  marketing_ngn: 300000, fixed_cost_ngn: 120000, reserve_ngn: 30000,
+  supplier_deposit_pct: 30, cash_tied_up_days: 55,
   stress_pct: 10, compliance: 'unresolved', channel: 'Direct sales', shipping: 'Air',
 };
 const margin = (inputs: Inputs) => calculate(inputs).scenarios[1].margin_pct;

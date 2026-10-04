@@ -1,17 +1,20 @@
 import type { Assessment, Inputs } from '@/types';
 import { ceilUnits, div, money, mul, parse } from '@/lib/money';
 
-/** Two formula versions exist on purpose (action plan T04).
+/** Three formula versions exist on purpose (action plans T04 and D02).
  *
  *  `unit-economics/1.0.0` is the float implementation the pilot shipped. It disagreed
  *  with the server on some accepted inputs, so nothing new is calculated with it — but
  *  assessments already saved under it must still replay to the values they were saved
  *  with, so `calculateV1_0_0` stays.
  *
- *  `unit-economics/1.1.0` is the current version: identical formulas, evaluated with the
- *  shared scaled-integer arithmetic in `money.ts` so the browser and the API agree exactly. */
-export const FORMULA_VERSION = 'unit-economics/1.1.0';
+ *  `unit-economics/1.1.0` is the first exact-decimal version.
+ *
+ *  `unit-economics/1.2.0` is the current explicit landed-cost model. No rate or omitted
+ *  cost is filled by this module; the Decision Room requires every input. */
+export const FORMULA_VERSION = 'unit-economics/1.2.0';
 export const THRESHOLD_VERSION = 'decision-gates/1.2.0';
+export const COST_MODEL_VERSION = 'landed-cost/2.0.0';
 
 export interface EvidenceGate { confidence: number; coverage: boolean; compliance_resolved: boolean; overall: number | null; observation_ids: string[]; compliance_status?: string }
 export const NO_EVIDENCE: EvidenceGate = { confidence: 0, coverage: false, compliance_resolved: false, overall: null, observation_ids: [], compliance_status: 'none' };
@@ -60,9 +63,49 @@ function scenariosV1_1_0(i: Inputs): ScenarioRow[] {
   });
 }
 
+/** Expanded D02 landed-cost lines, mirrored exactly by backend/app/economics.py. */
+function scenariosV1_2_0(i: Inputs): ScenarioRow[] {
+  const one=parse(1), hundred=parse(100), quantity=parse(i.quantity);
+  const unitCost=parse(i.unit_cost_usd), fx=parse(i.fx_ngn);
+  const total=(key:'freight_ngn'|'packaging_ngn'|'insurance_ngn'|'clearance_ngn'|'local_delivery_ngn'|'marketing_ngn'|'fixed_cost_ngn'|'reserve_ngn')=>parse(i[key]);
+  const dutyRate=div(parse(i.duty_pct),hundred), taxRate=div(parse(i.import_tax_pct),hundred);
+  const fxBufferRate=div(parse(i.fx_buffer_pct),hundred), sellingPrice=parse(i.selling_price_ngn);
+  const channelRate=div(parse(i.channel_fee_pct),hundred), paymentRate=div(parse(i.payment_fee_pct),hundred);
+  const returnsRate=div(parse(i.returns_pct),hundred), depositRate=div(parse(i.supplier_deposit_pct),hundred);
+  const marketingTotal=total('marketing_ngn'), fixedTotal=total('fixed_cost_ngn'), reserveTotal=total('reserve_ngn');
+  const launchTotals=marketingTotal+fixedTotal+reserveTotal, stress=div(parse(i.stress_pct),hundred);
+  const factors:[string,bigint,bigint][]=[['Downside',one-stress,one+stress],['Base',one,one],['Upside',one+stress,one-stress]];
+  return factors.map(([name,priceFactor,costFactor])=>{
+    const supplier=mul(mul(unitCost,fx),costFactor), fxBuffer=mul(supplier,fxBufferRate);
+    const packaging=mul(div(total('packaging_ngn'),quantity),costFactor);
+    const freight=mul(div(total('freight_ngn'),quantity),costFactor);
+    const insurance=mul(div(total('insurance_ngn'),quantity),costFactor);
+    const clearance=mul(div(total('clearance_ngn'),quantity),costFactor);
+    const localDelivery=mul(div(total('local_delivery_ngn'),quantity),costFactor);
+    const customsBase=supplier+fxBuffer+freight+insurance;
+    const duty=mul(customsBase,dutyRate), importTax=mul(customsBase+duty,taxRate);
+    const landed=supplier+fxBuffer+packaging+freight+insurance+duty+importTax+clearance+localDelivery;
+    const price=mul(sellingPrice,priceFactor), fees=mul(price,channelRate), paymentFees=mul(price,paymentRate);
+    const returns=mul(price,returnsRate), marketing=div(marketingTotal,quantity);
+    const overhead=div(fixedTotal,quantity), reserve=div(reserveTotal,quantity);
+    const contribution=price-landed-fees-paymentFees-returns-marketing-overhead-reserve;
+    const beforeFixed=price-landed-fees-paymentFees-returns;
+    return {name,supplier:money(supplier),fx_buffer:money(fxBuffer),packaging:money(packaging),
+      freight:money(freight),insurance:money(insurance),duty:money(duty),import_tax:money(importTax),
+      clearance:money(clearance),local_delivery:money(localDelivery),landed_cost:money(landed),
+      price:money(price),fees:money(fees),payment_fees:money(paymentFees),returns:money(returns),
+      marketing:money(marketing),overhead:money(overhead),reserve:money(reserve),contribution:money(contribution),
+      margin_pct:money(mul(div(contribution,price),hundred)),cash_required:money(mul(landed,quantity)+launchTotals),
+      supplier_deposit_cash:money(mul(mul(supplier,quantity),depositRate)),cash_tied_up_days:i.cash_tied_up_days,
+      break_even_cac:money(beforeFixed-overhead-reserve>0n?beforeFixed-overhead-reserve:0n),
+      break_even_units:beforeFixed>0n?ceilUnits(div(launchTotals,beforeFixed)):null};
+  });
+}
+
 const SCENARIO_FORMULAS: Record<string, (i: Inputs) => ScenarioRow[]> = {
   'unit-economics/1.0.0': scenariosV1_0_0,
   'unit-economics/1.1.0': scenariosV1_1_0,
+  'unit-economics/1.2.0': scenariosV1_2_0,
 };
 
 /** What a reviewer's rejection says, in the assessment as well as on the screen. */
@@ -160,7 +203,7 @@ export function economicsSummary(scenarios: ScenarioRow[]): EconomicsSummary {
 }
 
 export type NumericKey = Exclude<keyof Inputs,'compliance'|'channel'|'shipping'>;
-const SENSITIVITY_KEYS: NumericKey[] = ['unit_cost_usd','fx_ngn','freight_ngn','duty_pct','import_tax_pct','selling_price_ngn','channel_fee_pct','returns_pct','marketing_ngn','fixed_cost_ngn','quantity'];
+const SENSITIVITY_KEYS: NumericKey[] = ['unit_cost_usd','fx_ngn','fx_buffer_pct','packaging_ngn','freight_ngn','insurance_ngn','duty_pct','import_tax_pct','clearance_ngn','local_delivery_ngn','selling_price_ngn','channel_fee_pct','payment_fee_pct','returns_pct','marketing_ngn','fixed_cost_ngn','reserve_ngn','quantity'];
 export interface Swing { key: NumericKey; low: number; high: number; swing: number }
 /** Ranks inputs by how far a ±variation% change moves net margin after allocations. Scenarios, not forecasts. */
 export function sensitivity(i: Inputs, variation = 10): Swing[] {
@@ -173,11 +216,14 @@ export function sensitivity(i: Inputs, variation = 10): Swing[] {
 export interface Targets { target_margin: number; landed: number; price: number | null; max_landed: number | null; max_unit_cost_usd: number | null }
 /** The price and landed cost that would satisfy a target base margin under the current inputs. */
 export function targets(i: Inputs, target = 25): Targets {
-  const variable=(i.channel_fee_pct+i.returns_pct)/100, perUnitFixed=(i.marketing_ngn+i.fixed_cost_ngn)/i.quantity;
+  const variable=(i.channel_fee_pct+i.payment_fee_pct+i.returns_pct)/100, perUnitFixed=(i.marketing_ngn+i.fixed_cost_ngn+i.reserve_ngn)/i.quantity;
   const importFactor=(1+i.duty_pct/100)*(1+i.import_tax_pct/100);
-  const landed=(i.unit_cost_usd*i.fx_ngn+i.freight_ngn/i.quantity)*importFactor;
+  const supplierFactor=1+i.fx_buffer_pct/100;
+  const importBase=i.unit_cost_usd*i.fx_ngn*supplierFactor+(i.freight_ngn+i.insurance_ngn)/i.quantity;
+  const outsideImportBase=(i.packaging_ngn+i.clearance_ngn+i.local_delivery_ngn)/i.quantity;
+  const landed=importBase*importFactor+outsideImportBase;
   const headroom=1-variable-target/100;
   const maxLanded=i.selling_price_ngn*headroom-perUnitFixed;
-  const maxUnitCost=(maxLanded/importFactor-i.freight_ngn/i.quantity)/i.fx_ngn;
+  const maxUnitCost=((maxLanded-outsideImportBase)/importFactor-(i.freight_ngn+i.insurance_ngn)/i.quantity)/(i.fx_ngn*supplierFactor);
   return {target_margin:target, landed, price:headroom>0?(landed+perUnitFixed)/headroom:null, max_landed:maxLanded>0?maxLanded:null, max_unit_cost_usd:maxLanded>0&&maxUnitCost>0?maxUnitCost:null};
 }

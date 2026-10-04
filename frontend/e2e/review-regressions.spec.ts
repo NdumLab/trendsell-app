@@ -14,7 +14,7 @@ test('independent review: draft must use the evidence used by the saved decision
   }
   await page.goto(`/decisions?product=${pid}`);
   await expect(page.getByLabel('Choose product')).toHaveValue(pid);
-  await fillDecisionInputs(page, {'Supplier unit quote':'2','Total freight quote':'90000'});
+  await fillDecisionInputs(page, {'Supplier unit quote':'2','Total international freight':'90000'});
   const detail = await (await page.request.get(`/api/v1/products/${pid}`)).json();
   const draft = await downloadJson(page, () => page.getByRole('button',{name:'Export this draft'}).click());
   await page.getByRole('button',{name:'Save this decision'}).click();

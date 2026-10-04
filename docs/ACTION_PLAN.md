@@ -1,6 +1,6 @@
 **TrendSell — detailed plan of action**
 
-Created: 8 September 2026. Last corrected: 13 September 2026. Status: **in progress**.
+Created: 8 September 2026. Last corrected: 4 October 2026. Status: **in progress**.
 
 An independent review on 8 September ([CLAUDE_IMPLEMENTATION_REVIEW_2026-09-08.md](CLAUDE_IMPLEMENTATION_REVIEW_2026-09-08.md)) found that several items marked `Done` here had integration regressions that the suite did not catch, and declined to sign off on Gate A. A second independent review on 9 September ([CLAUDE_IMPLEMENTATION_REVIEW_2026-09-09.md](CLAUDE_IMPLEMENTATION_REVIEW_2026-09-09.md)) closed eight of those eleven findings, found R01, R03 and R07 still open in narrower cases, and found two further defects in the new recovery code — five findings recorded there as F01–F05. **F01–F05 are now corrected and verified** (see [CLAUDE_HANDOFF.md](CLAUDE_HANDOFF.md)). Statuses below distinguish *implemented and locally verified* from *externally blocked*. Gate A is **in review**, not done: it awaits a further independent review, and deployment stays pending that sign-off.
 
@@ -58,7 +58,7 @@ independently reviewed, and it does not mean deployed.
 | T01 audit regressions | Done | `tests/redesign/test_tenant_isolation.py`; shared app/database with separate cookie jars; whole suite also runs on PostgreSQL via `TEST_POSTGRES_URL`; removing the workspace filter fails 6 tests |
 | T02 Playwright isolation | Done | `frontend/playwright.config.ts`, `frontend/e2e/`; disposable API + SQLite file per run; `test:e2e -- --list` reports browser tests only; CI job added |
 | T03 export state and lineage | Done | Draft and saved exports are separate actions; assessments store their own evidence and versions; `e2e/export-integrity.spec.ts` reproduces both review findings. **Reopened and re-fixed (R01):** Decision Room preferred the list payload, which carries no evidence reading, so a current draft showed 0 confidence where the saved assessment showed 60. Now reads authoritative product detail; `e2e/decision-room-evidence.spec.ts` and the reviewer's own `e2e/review-regressions.spec.ts` |
-| T04 monetary precision | Done | `backend/app/money.py` / `frontend/src/lib/money.ts`; formula versioned to `unit-economics/1.1.0` with 1.0.0 replay preserved; 4000-case cross-language fuzz agrees exactly |
+| T04 monetary precision | Done | `backend/app/money.py` / `frontend/src/lib/money.ts`; exact arithmetic introduced in `unit-economics/1.1.0` and extended by D02 in current `1.2.0`; frozen 1.1.0 and 1.0.0 replay is preserved; generated shared cases and the 4000-case cross-language fuzz agree exactly |
 | T05 pagination and export | Done | `backend/app/pagination.py`; server-side search, keyset cursor, `/api/v1/export`, `/api/v1/summary`; 250-product regression. **Reopened and re-fixed (R05, R10):** the export omitted the `evidence` and `compliance_review` kinds entirely; quotes and watches were capped at a flat 200 with no next-page control, and the supplier picker chose only from the loaded page. `e2e/large-workspace.spec.ts` covers 250 quotes, 210 watches, the oldest product, and search scoping |
 | T06 concurrency | Done | `insert_unique()` savepoint; `tests/redesign/test_concurrency.py` reproduces the reported 500 against the pre-fix code |
 | T07 assessment vs evidence | Done | `latest_assessment` on products/watches, `economics_summary()`; `tests/redesign/test_assessment_visibility.py`, `e2e/assessment-visibility.spec.ts`. Depends on the R01 correction above for the draft/saved agreement it claims |
@@ -81,7 +81,8 @@ independently reviewed, and it does not mean deployed.
 | U02 coherent demo | Done (synthetic only) | The demo GO passes the production method and gates on labelled synthetic evidence and a synthetic reviewer approval; distinct per-product trajectories. **No real product has reached GO**, and none can until a collector supplies evidence above the 60-point self-reported cap |
 | C03 team-access portion | Partial | Owner-managed invitations and analyst/reviewer/viewer enforcement ship; billing, entitlements, cancellation/refunds and credit behavior remain planned with the rest of C03 |
 | D01 actionable quotes | Done (local verification; independent review pending) | Immutable quote revisions preserve supplier identity and exact decision provenance; validity, specifications, MOQ, Incoterm, delivery scope and payment terms are visible, with expiry/MOQ checks snapshotted into assessments. Full backend, frontend and browser suites passed on 2 October 2026. This is a new release candidate and has not been deployed or independently approved. |
-| N01, D02, D04, U01, U03–U05, M01–M06, C01, C02, C04 | Planned | Not started in this pass |
+| D02 explicit landed-cost contract | In review — locally implemented | Current `unit-economics/1.2.0` / `landed-cost/2.0.0` requires every cost input, snapshots complete cost lineage, records quote inclusions explicitly, rejects known double counts, and never infers inclusion from Incoterm. Generated client/server contracts agree and 1.1.0/1.0.0 replay remains frozen. Full backend, frontend and browser suites passed on 4 October 2026. Domain and independent review remain pending; this candidate is not deployed. See `TRUTH_AND_DRIFT_CONTRACT.md` and `releases/2026-10-04-d02-truth-contract-handoff.md`. |
+| N01, D04, U01, U03–U05, M01–M06, C01, C02, C04 | Planned | Not started in this pass |
 
 **Operating rules that every phase must preserve**
 
@@ -315,6 +316,7 @@ When implementation begins, append dated milestone evidence here or link to issu
 | Gate B: recoverable platform | Partial — 2026-09-12 | Clean deployment/adoption and a disposable current-head PostgreSQL dump/restore/replay are verified; controlled membership, SMTP transport, audit expiry, checksummed backups and encrypted offsite-copy mechanics ship and are documented. **Outstanding:** prove a configured mail provider, run the production restore drill, enable/monitor the schedule and private bucket policy, agree RPO/RTO and production retention, publish the privacy notice, verify installed logs and name operational/qualified-review owners. |
 | Gate C: genuine evidence | Planned | — |
 | Gate D: complete real investigation | Planned | — |
+| D02: explicit landed-cost contract | In review — 2026-10-04 | Formula 1.2 and cost model 2.0 add explicit packaging, insurance, clearance, local delivery, payment fees, FX buffer, reserve and cash timing; saved assessments retain complete user/source lineage and quote-inclusion checks. Generated current and frozen historical contracts pass on both implementations; 665 PostgreSQL backend tests, 160 frontend tests and 55 Chromium workflows passed. Domain/independent review and deployment remain outstanding, so Gate D is still planned. |
 | Gate E: controlled pilot | Planned | — |
 | Gate F: reliable recurring value | Planned | — |
 | Public/paid release readiness | Planned | — |

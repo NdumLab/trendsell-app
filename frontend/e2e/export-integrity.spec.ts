@@ -40,7 +40,7 @@ test.describe('export integrity', () => {
     await page.getByRole('button', { name: 'Save this decision' }).click();
     await expect(page.getByRole('button', { name: 'Export saved assessment' })).toBeVisible();
 
-    await page.getByLabel(label).selectOption({ index: 1 });
+    await page.getByLabel(label, { exact: true }).selectOption({ index: 1 });
     await expect(page.getByRole('button', { name: 'Export saved assessment' })).toHaveCount(0);
     expect(workspace.workspace).toBe('E2E workspace');
   });

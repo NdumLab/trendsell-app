@@ -27,7 +27,8 @@ from .permissions import matrix, require
 from . import mail
 from .evidence import EvidenceRequest, MANUAL_TRUTH_STATE, METHOD_VERSION, METRICS, quality
 from . import compliance as cmp
-from .economics import FORMULA_VERSION, THRESHOLD_VERSION, Inputs, calculate, economics_summary
+from .economics import (COST_MODEL_VERSION, CURRENT_COST_FIELDS, CURRENT_ROUTE_FIELDS, FORMULA_VERSION,
+                        THRESHOLD_VERSION, Inputs, calculate, economics_summary)
 from .pagination import DEFAULT_LIMIT, MAX_LIMIT, paginate, searched
 from .providers.common import ProviderError
 from .providers.live_sources import (
@@ -94,6 +95,40 @@ EXPORT_KINDS = [('product','products'), ('job','research_jobs'), ('decision','de
                 ('source_snapshot','source_snapshots'), ('source_status','source_statuses'),
                 ('discovery','discovery_runs')]
 EXPORT_SCHEMA = 'trendsell-workspace-export/4'
+
+# D02's provenance and double-counting contract. These names are shared by saved
+# assessments, exports and tests; adding a cost to the formula without adding it here
+# would leave an unexplained number and must fail the contract tests below.
+COST_LINE_ITEMS = (
+    ('unit_cost_usd', 'Supplier unit cost', 'USD / unit'),
+    ('fx_ngn', 'NGN per USD exchange rate', 'NGN / USD'),
+    ('fx_buffer_pct', 'FX timing buffer', '%'),
+    ('packaging_ngn', 'Packaging', 'NGN / order'),
+    ('freight_ngn', 'International freight', 'NGN / order'),
+    ('insurance_ngn', 'Cargo insurance', 'NGN / order'),
+    ('duty_pct', 'Import duty assumption', '%'),
+    ('import_tax_pct', 'Import tax assumption', '%'),
+    ('clearance_ngn', 'Customs clearance', 'NGN / order'),
+    ('local_delivery_ngn', 'Local delivery', 'NGN / order'),
+    ('selling_price_ngn', 'Target selling price', 'NGN / unit'),
+    ('channel_fee_pct', 'Sales-channel fee', '% of selling price'),
+    ('payment_fee_pct', 'Payment-processing fee', '% of selling price'),
+    ('returns_pct', 'Returns allowance', '% of selling price'),
+    ('marketing_ngn', 'Marketing budget', 'NGN / order'),
+    ('fixed_cost_ngn', 'Other fixed costs', 'NGN / order'),
+    ('reserve_ngn', 'Contingency reserve', 'NGN / order'),
+    ('supplier_deposit_pct', 'Supplier deposit', '% of supplier value'),
+    ('cash_tied_up_days', 'Cash tied-up period', 'days'),
+)
+QUOTE_INCLUSION_INPUTS = {
+    'packaging': 'packaging_ngn',
+    'insurance': 'insurance_ngn',
+    'international_freight': 'freight_ngn',
+    'import_duty': 'duty_pct',
+    'import_tax': 'import_tax_pct',
+    'customs_clearance': 'clearance_ngn',
+    'local_delivery': 'local_delivery_ngn',
+}
 
 HTTPS_URL = TypeAdapter(HttpUrl)
 
@@ -171,10 +206,27 @@ class ConfirmRequest(StrictModel):
 class DecisionRequest(StrictModel):
     product_id: str
     inputs: Inputs
+    cost_model_version: Literal['landed-cost/2.0.0'] = COST_MODEL_VERSION
     quote_id: str | None = Field(default=None, max_length=64)
     # Currency conversion is an explicit user assumption. USD quotes use 1.0 and do not
     # need this field; a CNY (or other) quote can never silently become a USD input.
     quote_fx_to_usd: float | None = Field(default=None, gt=0, le=1000000)
+
+    @model_validator(mode='after')
+    def complete_current_cost_model(self):
+        """A new assessment must contain explicit values, including explicit zeroes.
+
+        The Inputs defaults exist only to replay historical 1.0/1.1 assessments. Letting
+        them fill a new request would turn "not supplied" into "costs nothing", exactly
+        the unsupported inference the D02 model is intended to remove.
+        """
+        missing = sorted((CURRENT_COST_FIELDS | CURRENT_ROUTE_FIELDS)
+                         - self.inputs.model_fields_set)
+        if missing:
+            raise ValueError(
+                'The current landed-cost model requires explicit values for costs and '
+                f'routes (zero when a cost does not apply): {", ".join(missing)}.')
+        return self
 
 class WatchRequest(StrictModel):
     product_id: str
@@ -193,13 +245,17 @@ class QuoteRequest(StrictModel):
     lead_days: int = Field(ge=1, le=1000)
     quote_date: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
     valid_until: str | None = Field(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$')
-    incoterm: Literal['EXW','FOB','CIF','DDP'] = 'FOB'
+    incoterm: Literal['EXW','FOB','CIF','DDP'] | None = None
     product_specifications: str = Field(default='', max_length=2000)
     payment_terms: str = Field(default='', max_length=1000)
     delivery_scope: Literal[
         'unspecified', 'factory_only', 'international_freight',
         'international_and_local_delivery'
     ] = 'unspecified'
+    included_costs: list[Literal[
+        'packaging', 'insurance', 'international_freight', 'import_duty',
+        'import_tax', 'customs_clearance', 'local_delivery'
+    ]] | None = Field(default=None, max_length=7)
     supersedes_quote_id: str | None = Field(default=None, max_length=64)
     notes: str = Field(default='', max_length=2000)
 
@@ -209,6 +265,20 @@ class QuoteRequest(StrictModel):
             raise ValueError('Provide exactly one unit price.')
         if self.unit_price_usd is not None and self.currency != 'USD':
             raise ValueError('unit_price_usd can only be used with USD. Send unit_price for other currencies.')
+        if self.unit_price is not None and 'currency' not in self.model_fields_set:
+            raise ValueError('Currency must be explicit when unit_price is used.')
+        if self.included_costs is not None and len(self.included_costs) != len(set(self.included_costs)):
+            raise ValueError('Each included quote cost can be recorded only once.')
+        # None means an older client did not answer the question; [] means the user
+        # explicitly said the unit quote includes none of these separate cost lines.
+        included = set(self.included_costs or [])
+        if self.delivery_scope == 'factory_only' and included & {'international_freight', 'local_delivery'}:
+            raise ValueError('Factory-only delivery cannot also include freight or local delivery.')
+        if self.delivery_scope == 'international_freight' and 'international_freight' not in included:
+            raise ValueError('Confirm international freight in the explicit included-cost list.')
+        if self.delivery_scope == 'international_and_local_delivery' and not {
+                'international_freight', 'local_delivery'} <= included:
+            raise ValueError('Confirm both international freight and local delivery in the included-cost list.')
         return self
 
     @field_validator('source_url')
@@ -2191,6 +2261,7 @@ def create_app(settings=None):
                 requested_rate = 1.0
             if (existing.payload['product_id']!=payload.product_id
                     or existing.payload['inputs']!=payload.inputs.model_dump()
+                    or existing.payload.get('cost_model_version') != payload.cost_model_version
                     or existing.payload.get('quote_id') != payload.quote_id
                     or (existing_conversion is None and payload.quote_fx_to_usd is not None)
                     or (existing_conversion is not None
@@ -2207,6 +2278,7 @@ def create_app(settings=None):
         quote_snapshot = None
         quote_conversion = None
         quote_checks = None
+        assessed_at = now()
         if payload.quote_id:
             quote_row = owned(db,user,'quote',payload.quote_id)
             if quote_row.payload.get('product_id') != payload.product_id:
@@ -2239,15 +2311,60 @@ def create_app(settings=None):
             if quantity_state == 'below_moq':
                 warnings.append(
                     f'The scenario quantity {payload.inputs.quantity} is below the quote MOQ {minimum}.')
+            included_costs = quote_snapshot.get('included_costs')
+            duplicate_costs = []
+            if included_costs is None:
+                warnings.append(
+                    'This legacy quote has no explicit cost-inclusion list. No coverage '
+                    'was inferred from its Incoterm or delivery label.')
+                included_costs = []
+                inclusion_basis = 'legacy_not_recorded'
+            else:
+                inclusion_basis = 'explicit_quote_record'
+                for included in included_costs:
+                    input_key = QUOTE_INCLUSION_INPUTS[included]
+                    if getattr(payload.inputs, input_key) > 0:
+                        duplicate_costs.append(included)
+                if duplicate_costs:
+                    readable = ', '.join(item.replace('_', ' ') for item in duplicate_costs)
+                    raise HTTPException(
+                        422, f'The selected quote explicitly includes {readable}; enter zero '
+                             'for those separate cost inputs to avoid double counting.')
+            if quote_snapshot.get('incoterm') in {'CIF', 'DDP'} and not included_costs:
+                warnings.append(
+                    f'{quote_snapshot["incoterm"]} was recorded, but an Incoterm alone '
+                    'does not prove which costs this quote includes.')
             quote_checks = {
-                'evaluated_at': now(), 'valid_until': valid_until,
+                'evaluated_at': assessed_at, 'valid_until': valid_until,
                 'validity_state': validity_state, 'required_moq': minimum,
                 'scenario_quantity': payload.inputs.quantity,
                 'quantity_state': quantity_state, 'warnings': warnings,
+                'cost_inclusions': {
+                    'basis': inclusion_basis,
+                    'declared_included': included_costs,
+                    'separate_inputs_checked': [QUOTE_INCLUSION_INPUTS[item]
+                                                for item in included_costs],
+                    'double_counting': False,
+                },
             }
         elif payload.quote_fx_to_usd is not None:
             raise HTTPException(422, 'A quote currency conversion requires a selected supplier quote.')
         result=calculate(payload.inputs, reading)
+        cost_lineage = []
+        for key, label, unit in COST_LINE_ITEMS:
+            source = {'kind': 'decision_input', 'label': 'Entered by the assessment author'}
+            if key == 'unit_cost_usd' and quote_snapshot:
+                source = {'kind': 'supplier_quote', 'label': 'Selected immutable quote revision',
+                          'record_id': quote_snapshot['id'],
+                          'quote_date': quote_snapshot.get('quote_date')}
+            elif key == 'fx_ngn':
+                source = {'kind': 'decision_input',
+                          'label': 'User-supplied NGN/USD scenario rate; not a live feed'}
+            cost_lineage.append({
+                'key': key, 'label': label, 'value': getattr(payload.inputs, key),
+                'unit': unit, 'truth_state': 'User input', 'source': source,
+                'input_author': user.id, 'recorded_at': assessed_at,
+            })
         # The assessment carries its own evidence snapshot and versions, so an export never
         # has to reconstruct provenance from whatever product a screen has open (T03).
         result.update(product_id=product.id,product_name=product.payload['name'],product_asin=product.payload.get('asin'),
@@ -2256,6 +2373,20 @@ def create_app(settings=None):
                       quote_id=payload.quote_id,supplier_quote=quote_snapshot,
                       quote_conversion=quote_conversion,
                       quote_checks=quote_checks,
+                      cost_model_version=payload.cost_model_version,
+                      cost_lineage=cost_lineage,
+                      landed_cost_method={
+                          'version': payload.cost_model_version,
+                          'truth_state': 'Calculated',
+                          'duty_basis': ('supplier value + explicit FX buffer + international '
+                                         'freight + cargo insurance'),
+                          'import_tax_basis': 'duty basis + calculated duty',
+                          'missing_cost_policy': ('Every current cost input must be supplied; '
+                                                  'zero means the user said it does not apply.'),
+                          'incoterm_policy': ('Only the quote\'s explicit included-cost list '
+                                              'suppresses a separate input; Incoterms are not '
+                                              'treated as proof of inclusion.'),
+                      },
                       compliance_review_id=review['id'] if review else None,
                       threshold_version=THRESHOLD_VERSION,formula_version=FORMULA_VERSION,
                       economics=economics_summary(result['scenarios']))

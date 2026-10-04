@@ -89,19 +89,34 @@ export const DECISION_INPUTS: Record<string, string> = {
   'Order quantity': '300',
   'Supplier unit quote': '8.4',
   'Your exchange rate': '1500',
-  'Total freight quote': '900000',
+  'FX timing buffer': '2',
+  'Supplier deposit': '30',
+  'Cash tied-up period': '55',
+  'Total packaging cost': '90000',
+  'Total international freight': '900000',
+  'Total cargo insurance': '75000',
+  'Total customs clearance': '180000',
+  'Total local delivery': '120000',
   'Duty assumption': '5',
   'Import tax assumption': '7.5',
   'Target selling price': '32000',
-  'Channel & payment fees': '5',
+  'Sales channel fee': '4',
+  'Payment processing fee': '1',
   'Returns allowance': '3',
   'Total marketing budget': '300000',
-  'Fixed costs & reserves': '150000',
+  'Other fixed costs': '120000',
+  'Contingency reserve': '30000',
 };
 
 export async function fillDecisionInputs(page: Page, overrides: Record<string, string> = {}) {
-  for (const [label, value] of Object.entries({ ...DECISION_INPUTS, ...overrides }))
-    await page.getByLabel(label, { exact: true }).fill(value);
+  for (const [label, value] of Object.entries({ ...DECISION_INPUTS, ...overrides })) {
+    const input = page.getByLabel(label, { exact: true });
+    if (await input.isDisabled()) {
+      await expect(input, `${label} is disabled only when an explicit quote inclusion sets it to zero`).toHaveValue('0');
+      continue;
+    }
+    await input.fill(value);
+  }
 }
 
 /** Capture the JSON of the next download the page starts. */

@@ -1,5 +1,9 @@
 # Claude handoff — live-research engineering continuation
 
+> Continued on 4 October 2026 by
+> [`2026-10-04-d02-truth-contract-handoff.md`](2026-10-04-d02-truth-contract-handoff.md),
+> which records the explicit landed-cost and anti-drift work completed after this checkpoint.
+
 Prepared 30 September 2026 UTC and continued 2 October 2026 UTC on branch
 `impl/evidence-platform-phase0`.
 

@@ -122,16 +122,19 @@ export const demoProducts: Product[] = [
  *  blender's deliberately do not, so the example shows a NO-GO on economics alone. */
 export const demoInputsByProduct: Record<string, Inputs> = {
   'demo-steamer': { quantity: 300, unit_cost_usd: 8.4, fx_ngn: 1500, freight_ngn: 900000, duty_pct: 5,
-    import_tax_pct: 7.5, selling_price_ngn: 32000, channel_fee_pct: 5, returns_pct: 3,
-    marketing_ngn: 300000, fixed_cost_ngn: 150000, stress_pct: 10,
+    packaging_ngn: 90000, insurance_ngn: 75000, clearance_ngn: 180000, local_delivery_ngn: 120000,
+    import_tax_pct: 7.5, fx_buffer_pct: 2, selling_price_ngn: 32000, channel_fee_pct: 4, payment_fee_pct: 1, returns_pct: 3,
+    marketing_ngn: 300000, fixed_cost_ngn: 120000, reserve_ngn: 30000, supplier_deposit_pct: 30, cash_tied_up_days: 55, stress_pct: 10,
     compliance: 'unresolved', channel: 'Direct sales', shipping: 'Air' },
   'demo-lamp': { quantity: 250, unit_cost_usd: 6.2, fx_ngn: 1500, freight_ngn: 700000, duty_pct: 5,
-    import_tax_pct: 7.5, selling_price_ngn: 24000, channel_fee_pct: 5, returns_pct: 3,
-    marketing_ngn: 250000, fixed_cost_ngn: 120000, stress_pct: 10,
+    packaging_ngn: 60000, insurance_ngn: 50000, clearance_ngn: 150000, local_delivery_ngn: 90000,
+    import_tax_pct: 7.5, fx_buffer_pct: 2, selling_price_ngn: 24000, channel_fee_pct: 4, payment_fee_pct: 1, returns_pct: 3,
+    marketing_ngn: 250000, fixed_cost_ngn: 100000, reserve_ngn: 20000, supplier_deposit_pct: 30, cash_tied_up_days: 50, stress_pct: 10,
     compliance: 'unresolved', channel: 'Direct sales', shipping: 'Air' },
   'demo-blender': { quantity: 300, unit_cost_usd: 8.4, fx_ngn: 1500, freight_ngn: 900000, duty_pct: 5,
-    import_tax_pct: 7.5, selling_price_ngn: 20000, channel_fee_pct: 5, returns_pct: 3,
-    marketing_ngn: 300000, fixed_cost_ngn: 150000, stress_pct: 10,
+    packaging_ngn: 90000, insurance_ngn: 75000, clearance_ngn: 180000, local_delivery_ngn: 120000,
+    import_tax_pct: 7.5, fx_buffer_pct: 2, selling_price_ngn: 20000, channel_fee_pct: 4, payment_fee_pct: 1, returns_pct: 3,
+    marketing_ngn: 300000, fixed_cost_ngn: 120000, reserve_ngn: 30000, supplier_deposit_pct: 30, cash_tied_up_days: 55, stress_pct: 10,
     compliance: 'unresolved', channel: 'Direct sales', shipping: 'Air' },
 };
 
